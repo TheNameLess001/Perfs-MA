@@ -1,77 +1,95 @@
 import streamlit as st
+import pandas as pd
 
-# 1. Configuration de la page (Toujours en premier)
-st.set_page_config(
-    page_title="Yassir Performance",
-    page_icon="🍔",
-    layout="wide" # Exploite 100% de la largeur de l'écran
-)
+st.set_page_config(page_title="Yassir Performance", page_icon="🍔", layout="wide")
 
-# 2. EN-TÊTE ET TITRE
 st.title("📊 Dashboard Performances Yassir")
-st.markdown("Analyse des performances hebdomadaires par Account Manager.")
 st.markdown("---")
 
-# 3. PANNEAU DE CONTRÔLE EN HAUT (Filtres et Upload)
 st.markdown("### ⚙️ Configuration & Données")
-
-# On divise le haut de l'écran en 3 colonnes de largeur égale
 col_am, col_upload, col_week = st.columns(3)
 
 with col_am:
-    st.markdown("**1. Choisir l'Account Manager**")
-    # L'utilisateur choisit l'AM. Plus tard, le code ira lire "Pipeline-Houda.csv" ou "Pipeline-Yassine.csv"
-    am_choisi = st.selectbox("Sélection de la Pipeline", ["Houda", "Yassine", "Sara", "Amine"], label_visibility="collapsed")
-    st.caption(f"📂 Fichier source : `Pipeline-{am_choisi}`")
+    am_choisi = st.selectbox("Pipeline", ["Houda", "Yassine", "Sara", "Amine"], label_visibility="collapsed")
+    st.caption(f"📂 Fichier Config : `Pipeline - {am_choisi}.csv`")
 
 with col_upload:
-    st.markdown("**2. Charger les performances**")
-    # Le composant magique pour uploader la donnée à la volée
-    fichier_data = st.file_uploader("Upload Data", type=["xlsx", "csv"], label_visibility="collapsed")
+    fichier_data = st.file_uploader("Upload Data (admin-earnings...csv)", type=["csv", "xlsx"], label_visibility="collapsed")
 
 with col_week:
-    st.markdown("**3. Filtre d'affichage**")
-    semaine_choisie = st.selectbox("Semaine d'analyse", ["Week 27", "Week 26", "Week 25"], label_visibility="collapsed")
-    zone_choisie = st.multiselect("Filtrer par Segment", ["Segment A", "Segment B", "Segment C"], placeholder="Tous les segments")
+    semaine_choisie = st.selectbox("Semaine d'analyse", ["Week courante", "Week précédente"], label_visibility="collapsed")
 
 st.markdown("---")
 
-# 4. SÉCURITÉ UX : On attend le fichier
 if fichier_data is None:
-    # Si aucun fichier n'est uploadé, on affiche un message d'attente stylé et on arrête l'affichage ici
-    st.info("👋 Bienvenue ! Veuillez uploader le fichier de Data dans le panneau ci-dessus pour générer votre tableau de bord.")
+    st.info("👋 Veuillez uploader le fichier Data de la semaine pour générer le tableau de bord.")
     st.stop()
 
 # ==========================================
-# 🛑 TOUT CE QUI SUIT NE S'AFFICHE QUE SI LE FICHIER EST UPLOADÉ
+# ⚙️ MOTEUR DE TRAITEMENT DES DONNÉES (PANDAS)
 # ==========================================
 
-# 5. LES KPIs (Vue d'ensemble)
-st.markdown(f"### 🏆 Vue d'ensemble - {am_choisi} ({semaine_choisie})")
-kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+try:
+    # 1. Lecture du fichier Config de l'AM
+    # (En production, le fichier doit être dans le même dossier que app.py)
+    nom_fichier_pipeline = f"Pipeline - {am_choisi}.csv"
+    df_pipeline = pd.read_csv(nom_fichier_pipeline)
+    
+    # 2. Lecture du gros fichier Data uploadé
+    df_data = pd.read_csv(fichier_data)
 
-with kpi1:
-    st.metric(label="Commandes Livrées", value="1 245", delta="-5% WoW")
-with kpi2:
-    st.metric(label="Taux d'Acceptation", value="82%", delta="3% WoW")
-with kpi3:
-    st.metric(label="GMV Total", value="125K MAD", delta="-2% WoW")
-with kpi4:
-    st.metric(label="Annulations", value="45", delta="-10% WoW", delta_color="inverse")
+    # 3. LA FUSION MAGIQUE (L'équivalent du VLOOKUP)
+    # On garde toutes les commandes du fichier data qui correspondent aux Restos de l'AM
+    df_merged = pd.merge(df_data, df_pipeline, on="Restaurant ID", how="inner")
+
+    # 4. CRÉATION DU TABLEAU DE SYNTHÈSE (Overview)
+    # On calcule les indicateurs pour chaque restaurant
+    overview_table = df_merged.groupby(['Segment', 'Restaurant Name']).agg(
+        Requested=('order id', 'count'), # Nombre total de commandes reçues
+        Delivered=('status', lambda x: (x == 'Delivered').sum()), # Commandes livrées
+        GMV=('item total', lambda x: x[df_merged.loc[x.index, 'status'] == 'Delivered'].sum()) # Chiffre d'affaires livré
+    ).reset_index()
+
+    # 5. Calculs mathématiques (Taux)
+    overview_table['Success Rate'] = (overview_table['Delivered'] / overview_table['Requested']).fillna(0)
+    
+    # Formatage propre (pourcentage et monnaie)
+    overview_table['Success Rate'] = overview_table['Success Rate'].apply(lambda x: f"{x:.1%}")
+    overview_table['GMV'] = overview_table['GMV'].apply(lambda x: f"{x:,.2f} MAD")
+
+except Exception as e:
+    st.error(f"Une erreur est survenue lors du traitement des données : {e}")
+    st.stop()
+
+# ==========================================
+# 📈 AFFICHAGE DU DASHBOARD
+# ==========================================
+
+# Affichage des KPIs globaux
+total_req = overview_table['Requested'].sum()
+total_del = overview_table['Delivered'].sum()
+total_gmv = df_merged[df_merged['status'] == 'Delivered']['item total'].sum()
+
+kpi1, kpi2, kpi3 = st.columns(3)
+kpi1.metric(label="Total Requested", value=total_req)
+kpi2.metric(label="Total Delivered", value=total_del)
+kpi3.metric(label="GMV Total (Livré)", value=f"{total_gmv:,.0f} MAD")
 
 st.markdown("---")
 
-# 6. NAVIGATION PAR ONGLETS
 tab1, tab2, tab3 = st.tabs(["📈 Overview Pipeline", "🚨 Tops & Flops", "❌ Annulations"])
 
 with tab1:
-    st.markdown(f"#### 📋 Performances détaillées de la Pipeline de {am_choisi}")
-    st.success("Le tableau complet apparaîtra ici, fusionné entre le fichier uploadé et la Config de l'AM.")
+    st.markdown(f"#### 📋 Tableau de Synthèse : {am_choisi}")
+    # On affiche le tableau généré de manière interactive
+    st.dataframe(
+        overview_table, 
+        use_container_width=True, # Prend toute la largeur
+        hide_index=True # Cache la numérotation moche de gauche
+    )
 
 with tab2:
-    st.markdown("#### 📉 Classement des baisses (Drops)")
-    st.warning("Graphique des 50 pires baisses de commandes.")
+    st.markdown("#### 📉 Section en cours de construction...")
 
 with tab3:
-    st.markdown("#### 🔍 Raisons d'annulation (Restaurant Rejected)")
-    st.error("Graphique de répartition (Pie Chart) des annulations.")
+    st.markdown("#### 🔍 Section en cours de construction...")
