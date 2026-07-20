@@ -171,14 +171,14 @@ with tab_pipeline:
         df_compare['Wow Promo Order'] = (df_compare['Promo_Restaurant'] + df_compare['Promo_Admin']) - (df_compare['Promo_Restaurant_prev'].fillna(0) + df_compare['Promo_Admin_prev'].fillna(0))
         df_compare['Wow LR_LG_Costs'] = df_compare['LR_LG_Costs'] - df_compare['LR_LG_Costs_prev'].fillna(0)
     else:
-        # S'il n'y a pas de semaine passée dans le fichier, les WoW sont à 0
+        # S'il n'y a pas de semaine passée, WoW = 0
         df_compare = metrics_current.copy()
         for col in ['wow delivered', 'wow delivered %', 'wow T.A', 'wow Cancellation', 'wow GMV', 'Wow CA', 'Wow AOV', 'Wow Promo Order', 'Wow LR_LG_Costs']:
             df_compare[col] = 0
 
-    # Renommage final pour l'affichage propre
+    # 🛑 CORRECTION ICI : Ajout de 'Restaurant Name' en deuxième position !
     colonnes_finales = [
-        'Area', 'Semaine', 'Requested', 'Delivered', 'Success Rate', 
+        'Area', 'Restaurant Name', 'Semaine', 'Requested', 'Delivered', 'Success Rate', 
         'AcceptedByRestaurant', 'Taux Acceptation', 'CancelledByRestaurant', 'Taux Cancellation', 
         'GMV', 'AOV', 'Commission', 'Promo_Restaurant', 'Promo_Admin', 'LR_LG_Costs',
         'wow delivered', 'wow delivered %', 'wow T.A', 'wow Cancellation', 
@@ -186,7 +186,7 @@ with tab_pipeline:
     ]
     df_pipeline_display = df_compare[colonnes_finales].copy()
     
-    # Formattage visuel des pourcentages
+    # Formattage visuel
     for col in ['Success Rate', 'Taux Acceptation', 'Taux Cancellation', 'wow delivered %', 'wow T.A', 'wow Cancellation']:
         df_pipeline_display[col] = df_pipeline_display[col].apply(lambda x: f"{x:+.1%}")
     for col in ['GMV', 'AOV', 'Commission', 'Promo_Restaurant', 'Promo_Admin', 'LR_LG_Costs', 'wow GMV', 'Wow CA', 'Wow AOV', 'Wow Promo Order', 'Wow LR_LG_Costs']:
@@ -198,7 +198,6 @@ with tab_pipeline:
     st.markdown("##### 📍 Performance GMV vs Taux d'Acceptation par Restaurant")
     fig_scatter = px.scatter(df_compare, x="Taux Acceptation", y="GMV", color="Area", hover_name="Restaurant Name", size="Delivered", template="plotly_white")
     st.plotly_chart(fig_scatter, use_container_width=True)
-
 # ----------------------------------------
 # ONGLET 3 : TOPS & FLOPS
 # ----------------------------------------
