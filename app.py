@@ -1,95 +1,57 @@
-import streamlit as st
-import pandas as pd
-
-st.set_page_config(page_title="Yassir Performance", page_icon="🍔", layout="wide")
-
-st.title("📊 Dashboard Performances Yassir")
-st.markdown("---")
-
-st.markdown("### ⚙️ Configuration & Données")
-col_am, col_upload, col_week = st.columns(3)
-
-with col_am:
-    am_choisi = st.selectbox("Pipeline", ["Houda", "Yassine", "Sara", "Amine"], label_visibility="collapsed")
-    st.caption(f"📂 Fichier Config : `Pipeline - {am_choisi}.csv`")
-
-with col_upload:
-    fichier_data = st.file_uploader("Upload Data (admin-earnings...csv)", type=["csv", "xlsx"], label_visibility="collapsed")
-
-with col_week:
-    semaine_choisie = st.selectbox("Semaine d'analyse", ["Week courante", "Week précédente"], label_visibility="collapsed")
-
-st.markdown("---")
-
-if fichier_data is None:
-    st.info("👋 Veuillez uploader le fichier Data de la semaine pour générer le tableau de bord.")
-    st.stop()
+# On ajoute le nouvel onglet "Analyse Global" en première position
+tab_global, tab_pipeline, tab_flops, tab_annulations = st.tabs([
+    "🌍 Analyse Global", 
+    "📈 Overview Pipeline", 
+    "🚨 Tops & Flops", 
+    "❌ Annulations"
+])
 
 # ==========================================
-# ⚙️ MOTEUR DE TRAITEMENT DES DONNÉES (PANDAS)
+# 🌍 ONGLET 1 : ANALYSE GLOBAL
 # ==========================================
-
-try:
-    # 1. Lecture du fichier Config de l'AM
-    # (En production, le fichier doit être dans le même dossier que app.py)
-    nom_fichier_pipeline = f"Pipeline - {am_choisi}.csv"
-    df_pipeline = pd.read_csv(nom_fichier_pipeline)
+with tab_global:
+    st.markdown("#### 🌍 Analyse Macro des Performances")
     
-    # 2. Lecture du gros fichier Data uploadé
-    df_data = pd.read_csv(fichier_data)
-
-    # 3. LA FUSION MAGIQUE (L'équivalent du VLOOKUP)
-    # On garde toutes les commandes du fichier data qui correspondent aux Restos de l'AM
-    df_merged = pd.merge(df_data, df_pipeline, on="Restaurant ID", how="inner")
-
-    # 4. CRÉATION DU TABLEAU DE SYNTHÈSE (Overview)
-    # On calcule les indicateurs pour chaque restaurant
-    overview_table = df_merged.groupby(['Segment', 'Restaurant Name']).agg(
-        Requested=('order id', 'count'), # Nombre total de commandes reçues
-        Delivered=('status', lambda x: (x == 'Delivered').sum()), # Commandes livrées
-        GMV=('item total', lambda x: x[df_merged.loc[x.index, 'status'] == 'Delivered'].sum()) # Chiffre d'affaires livré
-    ).reset_index()
-
-    # 5. Calculs mathématiques (Taux)
-    overview_table['Success Rate'] = (overview_table['Delivered'] / overview_table['Requested']).fillna(0)
-    
-    # Formatage propre (pourcentage et monnaie)
-    overview_table['Success Rate'] = overview_table['Success Rate'].apply(lambda x: f"{x:.1%}")
-    overview_table['GMV'] = overview_table['GMV'].apply(lambda x: f"{x:,.2f} MAD")
-
-except Exception as e:
-    st.error(f"Une erreur est survenue lors du traitement des données : {e}")
-    st.stop()
-
-# ==========================================
-# 📈 AFFICHAGE DU DASHBOARD
-# ==========================================
-
-# Affichage des KPIs globaux
-total_req = overview_table['Requested'].sum()
-total_del = overview_table['Delivered'].sum()
-total_gmv = df_merged[df_merged['status'] == 'Delivered']['item total'].sum()
-
-kpi1, kpi2, kpi3 = st.columns(3)
-kpi1.metric(label="Total Requested", value=total_req)
-kpi2.metric(label="Total Delivered", value=total_del)
-kpi3.metric(label="GMV Total (Livré)", value=f"{total_gmv:,.0f} MAD")
-
-st.markdown("---")
-
-tab1, tab2, tab3 = st.tabs(["📈 Overview Pipeline", "🚨 Tops & Flops", "❌ Annulations"])
-
-with tab1:
-    st.markdown(f"#### 📋 Tableau de Synthèse : {am_choisi}")
-    # On affiche le tableau généré de manière interactive
-    st.dataframe(
-        overview_table, 
-        use_container_width=True, # Prend toute la largeur
-        hide_index=True # Cache la numérotation moche de gauche
+    # 1. Le sélecteur de vue (Jour / WoW / MoM) aligné horizontalement
+    vue_temporelle = st.radio(
+        "Sélectionnez la vue temporelle :",
+        ["📅 Jour", "📊 Week over Week (WoW)", "📆 Month over Month (MoM)"],
+        horizontal=True,
+        label_visibility="collapsed" # Cache le titre pour un look plus épuré
     )
+    
+    st.markdown("---")
+    
+    # 2. Préparation du tableau (Ici, j'utilise des données fictives pour le design)
+    # Dans la réalité, Pandas calculera ces chiffres automatiquement selon la "vue_temporelle" choisie
+    data_macro = {
+        "Période": ["Week 27", "Week 26", "Week 25"], # S'adaptera en "Jour" ou "Mois"
+        "Reçu": [1500, 1420, 1300],
+        "Livré": [1245, 1200, 1150],
+        "GMV (MAD)": [125000, 118000, 110000],
+        "CA (MAD)": [18750, 17700, 16500],
+        "AOV (MAD)": [100.4, 98.3, 95.6],
+        "V. Reçu": ["+5.6%", "+9.2%", "-"],
+        "V. Livré": ["+3.7%", "+4.3%", "-"],
+        "V. GMV": ["+5.9%", "+7.2%", "-"],
+        "V. CA": ["+5.9%", "+7.2%", "-"],
+        "V. AOV": ["+2.1%", "+2.8%", "-"]
+    }
+    df_global = pd.DataFrame(data_macro)
+    
+    # 3. Affichage du tableau
+    st.dataframe(
+        df_global,
+        use_container_width=True,
+        hide_index=True
+    )
+    
+    st.info(f"💡 Affichage actuel : Vous regardez la vue **{vue_temporelle}**.")
 
-with tab2:
-    st.markdown("#### 📉 Section en cours de construction...")
-
-with tab3:
-    st.markdown("#### 🔍 Section en cours de construction...")
+# ==========================================
+# 📈 ONGLET 2 : OVERVIEW PIPELINE
+# ==========================================
+with tab_pipeline:
+    st.markdown(f"#### 📋 Tableau de Synthèse : {am_choisi}")
+    # Le tableau Overview que nous avons créé précédemment viendra ici
+    # st.dataframe(...)
