@@ -1,356 +1,294 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
+from datetime import timedelta
 
 # ==========================================
 # 1. CONFIGURATION DE LA PAGE
 # ==========================================
-st.set_page_config(page_title="Yassir Performance", page_icon="🍔", layout="wide")
+st.set_page_config(page_title="Yassir Control Tower", page_icon="🍔", layout="wide")
 
-# ==========================================
-# 2. EN-TÊTE ET CONTRÔLES (AVEC SWITCH GLOBAL)
-# ==========================================
-st.title("📊 Dashboard Performances Yassir")
+st.title("📊 Control Tower Yassir")
 st.markdown("---")
 
+# ==========================================
+# 2. EN-TÊTE ET CONTRÔLES
+# ==========================================
 st.markdown("### ⚙️ Configuration & Données")
-
-# Choix de la portée d'analyse (Global ou par AM)
 vue_globale = st.radio("Portée de l'analyse :", ["🇲🇦 Global Maroc", "🎯 Par Account Manager (Pipeline)"], horizontal=True)
 
 col_am, col_upload = st.columns([1, 2])
-
 with col_am:
     if vue_globale == "🎯 Par Account Manager (Pipeline)":
         am_choisi = st.selectbox("Pipeline", ["Houda", "Yassine", "Sara", "Amine"], label_visibility="collapsed")
-        st.caption(f"📂 Config lue : `Pipeline - {am_choisi}.csv`")
     else:
         am_choisi = "Global"
-        st.caption("🌍 Analyse sur l'intégralité du pays.")
 
 with col_upload:
     fichier_data = st.file_uploader("Upload Data (admin-earnings...csv)", type=["csv", "xlsx"], label_visibility="collapsed")
 
 st.markdown("---")
-
 if fichier_data is None:
-    st.info("👋 Veuillez uploader le fichier Data de la semaine pour générer le tableau de bord.")
+    st.info("👋 Veuillez uploader le fichier Data de la semaine pour générer la Control Tower.")
     st.stop()
 
 # ==========================================
-# 3. MOTEUR DE DONNÉES ET PRÉPARATION
+# 3. MOTEUR DE DONNÉES
 # ==========================================
 try:
-    # 3.1 Lecture de la donnée brute
     df_data = pd.read_csv(fichier_data)
-    
-    # Standardisation du nom de la colonne restaurant pour faciliter les jointures
     if "restaurant name" in df_data.columns and "Restaurant Name" not in df_data.columns:
         df_data.rename(columns={"restaurant name": "Restaurant Name"}, inplace=True)
 
-    # 3.2 Filtrage selon le choix Global ou Pipeline
+    # Chargement dynamique des listes
     if vue_globale == "🎯 Par Account Manager (Pipeline)":
         df_pipeline = pd.read_csv(f"Pipeline - {am_choisi}.csv", sep=None, engine='python')
         df_merged = pd.merge(df_data, df_pipeline, on="Restaurant ID", how="inner")
+        liste_attendue = df_pipeline[['Restaurant ID', 'Restaurant Name']].drop_duplicates()
     else:
         df_merged = df_data.copy()
-        if 'Segment' not in df_merged.columns:
-            df_merged['Segment'] = 'Global' # Valeur par défaut si on est en vue globale
+        df_merged['Segment'] = 'Global'
+        liste_attendue = df_merged[['Restaurant ID', 'Restaurant Name']].drop_duplicates()
 
-    # 3.3 Lecture du fichier d'intégration Caisse.ma
-    try:
-        df_caisse = pd.read_csv("CaisseMA.csv", sep=None, engine='python')
-    except:
-        # Fichier vide ou non trouvé en sécurité
-        df_caisse = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name'])
+    # Lecture des fichiers annexes
+    try: df_caisse = pd.read_csv("CaisseMA.csv", sep=None, engine='python')
+    except: df_caisse = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name'])
+    
+    try: df_new = pd.read_csv("NewRestaurants.csv", sep=None, engine='python')
+    except: df_new = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name'])
 
-    # 3.4 Création des dates et semaines
+    # Gestion Temporelle
     df_merged['order day'] = pd.to_datetime(df_merged['order day'])
     df_merged['Week'] = "Week " + df_merged['order day'].dt.isocalendar().week.astype(str).str.zfill(2)
-
     semaines_dispos = sorted(df_merged['Week'].unique(), reverse=True)
 
 except Exception as e:
-    st.error(f"Erreur de lecture des données : {e}")
+    st.error(f"Erreur fatale de lecture : {e}")
     st.stop()
 
 with st.sidebar:
     st.markdown("### 📅 Filtres Temporels")
     semaine_selectionnee = st.selectbox("Semaine d'analyse", semaines_dispos)
-    
-    try:
-        index_semaine = semaines_dispos.index(semaine_selectionnee)
-        semaine_precedente = semaines_dispos[index_semaine + 1]
-    except IndexError:
-        semaine_precedente = None
+    try: semaine_precedente = semaines_dispos[semaines_dispos.index(semaine_selectionnee) + 1]
+    except IndexError: semaine_precedente = None
 
 # ==========================================
-# 4. PRÉ-CALCUL DES PERFORMANCES PAR RESTAURANT (Moteur WoW)
+# 4. FONCTIONS DE CALCUL (MOTEUR)
 # ==========================================
-# Nous le calculons ici pour pouvoir le réutiliser dans les onglets Pipeline, Tops et Caisse.ma
-def compute_metrics(df_week):
-    # On intègre le Restaurant ID pour pouvoir faire la jointure Caisse.ma plus tard
-    return df_week.groupby(['Area', 'Restaurant ID', 'Restaurant Name']).agg(
+def compute_metrics(df_subset, group_cols):
+    return df_subset.groupby(group_cols).agg(
         Requested=('order id', 'count'),
         Delivered=('status', lambda x: (x == 'Delivered').sum()),
-        CancelledByRestaurant=('status', lambda x: x.str.contains('restaurant', case=False, na=False).sum()),
-        GMV=('item total', lambda x: x[df_week.loc[x.index, 'status'] == 'Delivered'].sum()),
-        CA=('admin earnings', lambda x: x[df_week.loc[x.index, 'status'] == 'Delivered'].sum()),
-        Commission=('restaurant commission', lambda x: x[df_week.loc[x.index, 'status'] == 'Delivered'].sum()),
-        Promo_Restaurant=('coupon restaurant', 'sum'),
-        Promo_Admin=('coupon admin', 'sum'),
-        LR_LG_Costs=('driver payout', 'sum')
+        GMV=('item total', lambda x: x[df_subset.loc[x.index, 'status'] == 'Delivered'].sum()),
+        CA=('admin earnings', lambda x: x[df_subset.loc[x.index, 'status'] == 'Delivered'].sum()),
+        # Nouvelle définition Automation
+        Auto_Accepted=('Accepted By', lambda x: x.str.contains('restaurant', case=False, na=False).sum()),
+        Cancelled_Total=('status', lambda x: x.str.contains('Cancelled', case=False, na=False).sum())
     ).reset_index()
 
+def compare_wow(df_curr, df_prev, merge_on):
+    df_comp = pd.merge(df_curr, df_prev, on=merge_on, suffixes=('', '_prev'), how='left').fillna(0)
+    df_comp['Success Rate'] = (df_comp['Delivered'] / df_comp['Requested']).fillna(0)
+    df_comp['SR_prev'] = (df_comp['Delivered_prev'] / df_comp['Requested_prev']).fillna(0)
+    
+    df_comp['WoW Requested'] = df_comp['Requested'] - df_comp['Requested_prev']
+    df_comp['WoW Req %'] = (df_comp['Requested'] / df_comp['Requested_prev'] - 1).replace([float('inf'), -float('inf')], 0).fillna(0)
+    df_comp['WoW GMV'] = df_comp['GMV'] - df_comp['GMV_prev']
+    df_comp['WoW GMV %'] = (df_comp['GMV'] / df_comp['GMV_prev'] - 1).replace([float('inf'), -float('inf')], 0).fillna(0)
+    df_comp['WoW SR'] = df_comp['Success Rate'] - df_comp['SR_prev']
+    return df_comp
+
 df_current = df_merged[df_merged['Week'] == semaine_selectionnee]
-metrics_current = compute_metrics(df_current)
-
-metrics_current['Success Rate'] = (metrics_current['Delivered'] / metrics_current['Requested']).fillna(0)
-metrics_current['AcceptedByRestaurant'] = metrics_current['Requested'] - metrics_current['CancelledByRestaurant']
-metrics_current['Taux Acceptation'] = (metrics_current['AcceptedByRestaurant'] / metrics_current['Requested']).fillna(0)
-metrics_current['Taux Cancellation'] = (metrics_current['CancelledByRestaurant'] / metrics_current['Requested']).fillna(0)
-metrics_current['AOV'] = (metrics_current['GMV'] / metrics_current['Delivered']).fillna(0)
-metrics_current['Semaine'] = semaine_selectionnee
-
-if semaine_precedente:
-    df_prev = df_merged[df_merged['Week'] == semaine_precedente]
-    metrics_prev = compute_metrics(df_prev)
-    metrics_prev['AcceptedByRestaurant'] = metrics_prev['Requested'] - metrics_prev['CancelledByRestaurant']
-    metrics_prev['Taux Acceptation'] = (metrics_prev['AcceptedByRestaurant'] / metrics_prev['Requested']).fillna(0)
-    metrics_prev['Taux Cancellation'] = (metrics_prev['CancelledByRestaurant'] / metrics_prev['Requested']).fillna(0)
-    metrics_prev['AOV'] = (metrics_prev['GMV'] / metrics_prev['Delivered']).fillna(0)
-    
-    df_compare = pd.merge(metrics_current, metrics_prev, on=['Area', 'Restaurant ID', 'Restaurant Name'], suffixes=('', '_prev'), how='left')
-    
-    df_compare['wow delivered'] = df_compare['Delivered'] - df_compare['Delivered_prev'].fillna(0)
-    df_compare['wow delivered %'] = (df_compare['Delivered'] / df_compare['Delivered_prev'] - 1).fillna(0)
-    df_compare['wow T.A'] = df_compare['Taux Acceptation'] - df_compare['Taux Acceptation_prev'].fillna(0)
-    df_compare['wow Cancellation'] = df_compare['Taux Cancellation'] - df_compare['Taux Cancellation_prev'].fillna(0)
-    df_compare['wow GMV'] = df_compare['GMV'] - df_compare['GMV_prev'].fillna(0)
-    df_compare['Wow CA'] = df_compare['CA'] - df_compare['CA_prev'].fillna(0)
-    df_compare['Wow AOV'] = df_compare['AOV'] - df_compare['AOV_prev'].fillna(0)
-    df_compare['Wow Promo Order'] = (df_compare['Promo_Restaurant'] + df_compare['Promo_Admin']) - (df_compare['Promo_Restaurant_prev'].fillna(0) + df_compare['Promo_Admin_prev'].fillna(0))
-    df_compare['Wow LR_LG_Costs'] = df_compare['LR_LG_Costs'] - df_compare['LR_LG_Costs_prev'].fillna(0)
-else:
-    df_compare = metrics_current.copy()
-    for col in ['wow delivered', 'wow delivered %', 'wow T.A', 'wow Cancellation', 'wow GMV', 'Wow CA', 'Wow AOV', 'Wow Promo Order', 'Wow LR_LG_Costs']:
-        df_compare[col] = 0
-        df_compare[col.replace('wow ', '') + '_prev'] = 0
-
-colonnes_finales = [
-    'Area', 'Restaurant Name', 'Semaine', 'Requested', 'Delivered', 'Success Rate', 
-    'AcceptedByRestaurant', 'Taux Acceptation', 'CancelledByRestaurant', 'Taux Cancellation', 
-    'GMV', 'AOV', 'Commission', 'Promo_Restaurant', 'Promo_Admin', 'LR_LG_Costs',
-    'wow delivered', 'wow delivered %', 'wow T.A', 'wow Cancellation', 
-    'wow GMV', 'Wow CA', 'Wow AOV', 'Wow Promo Order', 'Wow LR_LG_Costs'
-]
+df_prev = df_merged[df_merged['Week'] == semaine_precedente] if semaine_precedente else pd.DataFrame(columns=df_merged.columns)
 
 # ==========================================
 # 5. STRUCTURE DES ONGLETS
 # ==========================================
-tab_global, tab_pipeline, tab_flops, tab_annulations, tab_automation, tab_caisse = st.tabs([
-    "🌍 Analyse Global", 
-    "📈 Overview Pipeline", 
-    "🚨 Tops & Flops", 
-    "❌ Annulations",
-    "🤖 Automation",
-    "💻 Intégration Caisse.ma"
+tabs = st.tabs([
+    "🌍 1. Analyse Global", 
+    "📈 2. Overview & Tops/Flops", 
+    "❌ 3. Annulations",
+    "🤖 4. Automation",
+    "💻 5. Caisse.ma",
+    "✨ 6. New Restaurants",
+    "👻 7. Inactifs"
 ])
 
 # ----------------------------------------
 # ONGLET 1 : ANALYSE GLOBAL
 # ----------------------------------------
-with tab_global:
-    st.markdown(f"#### 🌍 Analyse Macro des Performances ({am_choisi})")
+with tabs[0]:
+    st.markdown("#### 🌍 Analyse Macro des Performances")
     
-    vue_temporelle = st.radio("Vue temporelle :", ["📅 Jour", "📊 Week over Week (WoW)"], horizontal=True)
+    # KPIs Globaux
+    df_macro = compute_metrics(df_merged, ['order day'])
+    df_macro = df_macro.sort_values('order day')
+    
+    col_chart1, col_chart2 = st.columns(2)
+    with col_chart1:
+        fig_gmv = px.line(df_macro, x="order day", y="GMV", title="Tendance GMV (Daily)", markers=True, template="plotly_white")
+        st.plotly_chart(fig_gmv, use_container_width=True)
+    with col_chart2:
+        fig_req = px.line(df_macro, x="order day", y="Requested", title="Tendance Requested (Daily)", markers=True, template="plotly_white", color_discrete_sequence=['#f39c12'])
+        st.plotly_chart(fig_req, use_container_width=True)
+    
     st.markdown("---")
+    st.markdown("#### 📍 Performances par City & Area")
     
-    if vue_temporelle == "📅 Jour":
-        df_merged['Période'] = df_merged['order day'].dt.strftime('%Y-%m-%d')
+    if 'city' in df_merged.columns and 'Area' in df_merged.columns:
+        city_curr = compute_metrics(df_current, ['city'])
+        city_prev = compute_metrics(df_prev, ['city'])
+        city_comp = compare_wow(city_curr, city_prev, ['city'])
+        
+        area_curr = compute_metrics(df_current, ['city', 'Area'])
+        area_prev = compute_metrics(df_prev, ['city', 'Area'])
+        area_comp = compare_wow(area_curr, area_prev, ['city', 'Area'])
+        
+        col_city, col_area = st.columns(2)
+        with col_city:
+            st.markdown("**🏙️ Performance City (WoW)**")
+            disp_city = city_comp[['city', 'Requested', 'WoW Req %', 'GMV', 'WoW GMV %', 'Success Rate', 'WoW SR']].copy()
+            disp_city.style.format({'WoW Req %': '{:+.1%}', 'GMV': '{:,.0f}', 'WoW GMV %': '{:+.1%}', 'Success Rate': '{:.1%}', 'WoW SR': '{:+.1%}'})
+            st.dataframe(disp_city, hide_index=True)
+            
+        with col_area:
+            st.markdown("**🏘️ Performance Area (WoW)**")
+            disp_area = area_comp[['Area', 'Requested', 'WoW Req %', 'GMV', 'WoW GMV %', 'Success Rate', 'WoW SR']].sort_values('Requested', ascending=False).head(15).copy()
+            st.dataframe(disp_area.style.format({'WoW Req %': '{:+.1%}', 'GMV': '{:,.0f}', 'WoW GMV %': '{:+.1%}', 'Success Rate': '{:.1%}', 'WoW SR': '{:+.1%}'}), hide_index=True)
     else:
-        df_merged['Période'] = df_merged['Week']
+        st.warning("Colonnes 'city' ou 'Area' introuvables.")
 
-    df_macro = df_merged.groupby('Période').agg(
-        Reçu=('order id', 'count'),
-        Livré=('status', lambda x: (x == 'Delivered').sum()),
-        GMV=('item total', lambda x: x[df_merged.loc[x.index, 'status'] == 'Delivered'].sum()),
-        CA=('admin earnings', lambda x: x[df_merged.loc[x.index, 'status'] == 'Delivered'].sum())
+# ----------------------------------------
+# ONGLET 2 : OVERVIEW & TOPS / FLOPS
+# ----------------------------------------
+with tabs[1]:
+    st.markdown("#### 📋 Overview & Segments")
+    
+    resto_curr = compute_metrics(df_current, ['Area', 'Restaurant ID', 'Restaurant Name'])
+    resto_prev = compute_metrics(df_prev, ['Area', 'Restaurant ID', 'Restaurant Name'])
+    resto_comp = compare_wow(resto_curr, resto_prev, ['Area', 'Restaurant ID', 'Restaurant Name'])
+    
+    # Tiering A, B, C basé sur le GMV
+    try:
+        resto_comp['Tier'] = pd.qcut(resto_comp['GMV'].rank(method='first'), q=[0, 0.4, 0.8, 1.0], labels=['Tier C (Low)', 'Tier B (Mid)', 'Tier A (Top)'])
+    except:
+        resto_comp['Tier'] = "N/A"
+    
+    # Affichage du Tableau avec Tiering et Acceleration
+    disp_resto = resto_comp[['Tier', 'Area', 'Restaurant Name', 'Requested', 'WoW Req %', 'Delivered', 'GMV', 'WoW GMV %', 'Success Rate', 'WoW SR']].copy()
+    st.dataframe(disp_resto.sort_values('GMV', ascending=False).style.format({'WoW Req %': '{:+.1%}', 'GMV': '{:,.0f}', 'WoW GMV %': '{:+.1%}', 'Success Rate': '{:.1%}', 'WoW SR': '{:+.1%}'}), use_container_width=True, hide_index=True)
+    
+    # Intelligence : Anomalies
+    anomalies = resto_comp[(resto_comp['Tier'] == 'Tier A (Top)') & (resto_comp['WoW GMV %'] < -0.2)]
+    if not anomalies.empty:
+        st.error(f"⚠️ **Anomalie détectée :** {len(anomalies)} restaurants Tier A ont perdu plus de 20% de GMV cette semaine !")
+    
+    # Section Tops & Flops
+    st.markdown("---")
+    st.markdown("#### 📈 Tops & Flops (Accélération WoW)")
+    col_t, col_f = st.columns(2)
+    with col_t:
+        st.success("🏆 **Top 10 - Croissance GMV**")
+        st.dataframe(resto_comp.sort_values('WoW GMV', ascending=False).head(10)[['Restaurant Name', 'WoW GMV', 'WoW GMV %']].style.format({'WoW GMV': '{:,.0f}', 'WoW GMV %': '{:+.1%}'}), hide_index=True)
+    with col_f:
+        st.error("📉 **Flop 10 - Chute GMV**")
+        st.dataframe(resto_comp.sort_values('WoW GMV', ascending=True).head(10)[['Restaurant Name', 'WoW GMV', 'WoW GMV %']].style.format({'WoW GMV': '{:,.0f}', 'WoW GMV %': '{:+.1%}'}), hide_index=True)
+
+# ----------------------------------------
+# ONGLET 3 : ANNULATIONS
+# ----------------------------------------
+with tabs[2]:
+    st.markdown("#### ❌ Analyse des Annulations")
+    
+    df_canc_curr = df_current[df_current['status'].str.contains('Cancelled', case=False, na=False)]
+    
+    col_c1, col_c2 = st.columns(2)
+    with col_c1:
+        st.markdown("**Comparaison Global vs Périmètres (Area)**")
+        if 'Area' in df_canc_curr.columns:
+            canc_area = df_canc_curr.groupby('Area').size().reset_index(name='Annulations')
+            req_area = df_current.groupby('Area').size().reset_index(name='Total Req')
+            m_area = pd.merge(canc_area, req_area, on='Area')
+            m_area['% Cancel'] = m_area['Annulations'] / m_area['Total Req']
+            st.dataframe(m_area.sort_values('% Cancel', ascending=False).head(10).style.format({'% Cancel': '{:.1%}'}), hide_index=True)
+    
+    with col_c2:
+        st.markdown("**Tendance Annulations (Daily)**")
+        canc_trend = df_merged[df_merged['status'].str.contains('Cancelled', case=False, na=False)].groupby('order day').size().reset_index(name='Annulations')
+        st.plotly_chart(px.bar(canc_trend, x='order day', y='Annulations'), use_container_width=True)
+
+    st.markdown("---")
+    st.markdown("#### 🚨 Les Récidivistes (Pires Taux d'Annulation WoW)")
+    
+    resto_canc = resto_comp[['Restaurant Name', 'Requested', 'Cancelled_Total', 'Requested_prev', 'Cancelled_Total_prev']].copy()
+    resto_canc['Taux Cancel'] = resto_canc['Cancelled_Total'] / resto_canc['Requested']
+    resto_canc['Taux Cancel_prev'] = resto_canc['Cancelled_Total_prev'] / resto_canc['Requested_prev']
+    resto_canc['WoW Cancel'] = resto_canc['Taux Cancel'] - resto_canc['Taux Cancel_prev']
+    
+    pires = resto_canc[resto_canc['Requested'] > 10].sort_values('Taux Cancel', ascending=False).head(15)
+    st.dataframe(pires.style.format({'Taux Cancel': '{:.1%}', 'Taux Cancel_prev': '{:.1%}', 'WoW Cancel': '{:+.1%}'}), use_container_width=True, hide_index=True)
+
+# ----------------------------------------
+# ONGLET 4 : AUTOMATION
+# ----------------------------------------
+with tabs[3]:
+    st.markdown("#### 🤖 Suivi de l'Automatisation")
+    st.markdown("*Basé sur la colonne `Accepted By == 'restaurant'`*")
+    
+    df_current['Is_Auto'] = df_current['Accepted By'].str.contains('restaurant', case=False, na=False)
+    
+    auto_recap = df_current.groupby('Is_Auto').agg(
+        Requested=('order id', 'count'),
+        Delivered=('status', lambda x: (x == 'Delivered').sum()),
+        GMV=('item total', lambda x: x[df_current.loc[x.index, 'status'] == 'Delivered'].sum())
     ).reset_index()
-
-    df_macro['AOV'] = (df_macro['GMV'] / df_macro['Livré']).fillna(0)
-    df_macro = df_macro.sort_values(by='Période', ascending=True)
-
-    df_macro['V. Reçu'] = df_macro['Reçu'].pct_change()
-    df_macro['V. Livré'] = df_macro['Livré'].pct_change()
-    df_macro['V. GMV'] = df_macro['GMV'].pct_change()
-    df_macro['V. CA'] = df_macro['CA'].pct_change()
-    df_macro['V. AOV'] = df_macro['AOV'].pct_change()
-
-    df_macro_display = df_macro.sort_values(by='Période', ascending=False).copy()
-    for col in ['V. Reçu', 'V. Livré', 'V. GMV', 'V. CA', 'V. AOV']:
-        df_macro_display[col] = df_macro_display[col].apply(lambda x: f"{x:+.1%}" if pd.notnull(x) else "-")
-    for col in ['GMV', 'CA', 'AOV']:
-        df_macro_display[col] = df_macro_display[col].apply(lambda x: f"{x:,.2f}")
-
-    st.dataframe(df_macro_display[['Période', 'Reçu', 'Livré', 'GMV', 'CA', 'AOV', 'V. Reçu', 'V. Livré', 'V. GMV', 'V. CA', 'V. AOV']], use_container_width=True, hide_index=True)
+    auto_recap['Success Rate'] = auto_recap['Delivered'] / auto_recap['Requested']
+    auto_recap['Type'] = auto_recap['Is_Auto'].map({True: '🤖 Automatisé (Restaurant)', False: '👨‍💻 Manuel (Autre)'})
     
-    fig_macro = px.line(df_macro, x="Période", y="GMV", title="Tendance GMV", markers=True, template="plotly_white")
-    st.plotly_chart(fig_macro, use_container_width=True)
+    st.markdown("**📊 Performance Automatisé vs Non-Automatisé**")
+    st.dataframe(auto_recap[['Type', 'Requested', 'Delivered', 'Success Rate', 'GMV']].style.format({'Success Rate': '{:.1%}', 'GMV': '{:,.0f}'}), hide_index=True)
 
 # ----------------------------------------
-# ONGLET 2 : OVERVIEW PIPELINE
+# ONGLET 5 : CAISSE.MA
 # ----------------------------------------
-with tab_pipeline:
-    st.markdown(f"#### 📋 Tableau Détaillé ({semaine_selectionnee} - {am_choisi})")
-    
-    df_pipeline_display = df_compare[colonnes_finales].copy()
-    
-    for col in ['Success Rate', 'Taux Acceptation', 'Taux Cancellation', 'wow delivered %', 'wow T.A', 'wow Cancellation']:
-        df_pipeline_display[col] = df_pipeline_display[col].apply(lambda x: f"{x:+.1%}")
-    for col in ['GMV', 'AOV', 'Commission', 'Promo_Restaurant', 'Promo_Admin', 'LR_LG_Costs', 'wow GMV', 'Wow CA', 'Wow AOV', 'Wow Promo Order', 'Wow LR_LG_Costs']:
-        df_pipeline_display[col] = df_pipeline_display[col].apply(lambda x: f"{x:,.1f}")
-
-    st.dataframe(df_pipeline_display, use_container_width=True, hide_index=True)
-
-# ----------------------------------------
-# ONGLET 3 : TOPS & FLOPS
-# ----------------------------------------
-with tab_flops:
-    st.markdown("#### 📉 Classement des variations WoW (Delivered)")
-    col_top, col_flop = st.columns(2)
-    
-    with col_top:
-        st.success("**🏆 Top 10 - Plus fortes progressions**")
-        top_10 = df_compare.sort_values(by="wow delivered", ascending=False).head(10)
-        st.dataframe(top_10[['Restaurant Name', 'Area', 'wow delivered', 'wow delivered %']].style.format({"wow delivered %": "{:+.1%}"}), hide_index=True, use_container_width=True)
-        
-    with col_flop:
-        st.error("**⚠️ Flop 10 - Plus fortes baisses (Drops)**")
-        flop_10 = df_compare.sort_values(by="wow delivered", ascending=True).head(10)
-        st.dataframe(flop_10[['Restaurant Name', 'Area', 'wow delivered', 'wow delivered %']].style.format({"wow delivered %": "{:+.1%}"}), hide_index=True, use_container_width=True)
-
-# ----------------------------------------
-# ONGLET 4 : ANNULATIONS
-# ----------------------------------------
-with tab_annulations:
-    st.markdown(f"#### ❌ Analyse des Annulations ({semaine_selectionnee})")
-    df_cancelled = df_current[df_current['status'].str.contains('Cancelled', case=False, na=False)]
-    
-    if not df_cancelled.empty:
-        cancel_reasons = df_cancelled['cancellation reason '].value_counts().reset_index()
-        cancel_reasons.columns = ['Raison', 'Nombre']
-        
-        col_chart, col_table = st.columns([2, 1])
-        with col_chart:
-            fig_pie = px.pie(cancel_reasons, values='Nombre', names='Raison', title="Motifs d'annulation", hole=0.4)
-            st.plotly_chart(fig_pie, use_container_width=True)
-        with col_table:
-            st.dataframe(cancel_reasons, hide_index=True, use_container_width=True)
-    else:
-        st.success("🎉 Aucune annulation sur cette semaine !")
-
-# ----------------------------------------
-# ONGLET 5 : AUTOMATION
-# ----------------------------------------
-with tab_automation:
-    st.markdown(f"#### 🤖 Suivi de l'Automatisation ({semaine_selectionnee})")
-    col_recap1, col_recap2, col_recap3 = st.columns(3)
-    
-    tot_req = df_compare['Requested'].sum()
-    tot_acc = df_compare['AcceptedByRestaurant'].sum()
-    ta_global = tot_acc / tot_req if tot_req > 0 else 0
-    
-    if semaine_precedente:
-        tot_req_prev = df_compare['Requested_prev'].sum()
-        tot_acc_prev = df_compare['AcceptedByRestaurant_prev'].sum()
-        ta_global_prev = tot_acc_prev / tot_req_prev if tot_req_prev > 0 else 0
-    else:
-        tot_req_prev, tot_acc_prev, ta_global_prev = 0, 0, 0
-        
-    wow_ta_global = ta_global - ta_global_prev
-    
-    col_recap1.metric("Commandes Reçues", f"{tot_req:,.0f}", f"{(tot_req - tot_req_prev):+,.0f} WoW")
-    col_recap2.metric("Commandes Acceptées", f"{tot_acc:,.0f}", f"{(tot_acc - tot_acc_prev):+,.0f} WoW")
-    col_recap3.metric("Taux d'Acceptation", f"{ta_global:.1%}", f"{wow_ta_global:+.1%} WoW")
-    st.markdown("---")
-    
-    col_acc, col_reg = st.columns(2)
-    cols_to_show = ['Restaurant Name', 'Area', 'Requested', 'Taux Acceptation_prev', 'Taux Acceptation', 'wow T.A']
-    
-    with col_acc:
-        st.success("**🚀 Top Accélérations T.A**")
-        df_acc = df_compare[df_compare['wow T.A'] > 0].sort_values('wow T.A', ascending=False).head(15)
-        df_acc_disp = df_acc[cols_to_show].copy()
-        df_acc_disp['Taux Acceptation_prev'] = df_acc_disp['Taux Acceptation_prev'].apply(lambda x: f"{x:.1%}")
-        df_acc_disp['Taux Acceptation'] = df_acc_disp['Taux Acceptation'].apply(lambda x: f"{x:.1%}")
-        df_acc_disp['wow T.A'] = df_acc_disp['wow T.A'].apply(lambda x: f"{x:+.1%}")
-        st.dataframe(df_acc_disp, hide_index=True, use_container_width=True)
-
-    with col_reg:
-        st.error("**⚠️ Pires Régressions T.A**")
-        df_reg = df_compare[df_compare['wow T.A'] < 0].sort_values('wow T.A', ascending=True).head(15)
-        df_reg_disp = df_reg[cols_to_show].copy()
-        df_reg_disp['Taux Acceptation_prev'] = df_reg_disp['Taux Acceptation_prev'].apply(lambda x: f"{x:.1%}")
-        df_reg_disp['Taux Acceptation'] = df_reg_disp['Taux Acceptation'].apply(lambda x: f"{x:.1%}")
-        df_reg_disp['wow T.A'] = df_reg_disp['wow T.A'].apply(lambda x: f"{x:+.1%}")
-        st.dataframe(df_reg_disp, hide_index=True, use_container_width=True)
-
-# ----------------------------------------
-# ONGLET 6 : CAISSE.MA (NOUVEAU)
-# ----------------------------------------
-with tab_caisse:
-    st.markdown("#### 💻 Performances des Intégrations (Caisse.ma)")
-    st.markdown("Analyse isolée des restaurants utilisant l'agrégateur de commandes.")
-    
+with tabs[4]:
+    st.markdown("#### 💻 Intégration Caisse.ma")
     if df_caisse.empty:
-        st.warning("⚠️ Fichier `CaisseMA.csv` introuvable ou vide. Uploadez-le sur GitHub pour activer cet onglet.")
+        st.warning("Fichier `CaisseMA.csv` introuvable.")
     else:
-        # On filtre la donnée globale pour ne garder que les restos Caisse.ma
-        df_compare_caisse = df_compare[df_compare['Restaurant ID'].isin(df_caisse['Restaurant ID'])]
-        
-        if df_compare_caisse.empty:
-            st.info("Aucun restaurant de la vue actuelle n'est équipé de Caisse.ma.")
-        else:
-            # --- KPIs Caisse.ma ---
-            st.markdown("##### 🏆 Vue d'ensemble Caisse.ma")
-            col_kpi_c1, col_kpi_c2, col_kpi_c3 = st.columns(3)
-            
-            tot_req_caisse = df_compare_caisse['Requested'].sum()
-            tot_acc_caisse = df_compare_caisse['AcceptedByRestaurant'].sum()
-            ta_caisse = tot_acc_caisse / tot_req_caisse if tot_req_caisse > 0 else 0
-            
-            if semaine_precedente:
-                tot_req_prev_caisse = df_compare_caisse['Requested_prev'].sum()
-                tot_acc_prev_caisse = df_compare_caisse['AcceptedByRestaurant_prev'].sum()
-                ta_prev_caisse = tot_acc_prev_caisse / tot_req_prev_caisse if tot_req_prev_caisse > 0 else 0
-            else:
-                tot_req_prev_caisse, tot_acc_prev_caisse, ta_prev_caisse = 0, 0, 0
-                
-            col_kpi_c1.metric("Restaurants Équipés", len(df_compare_caisse))
-            col_kpi_c2.metric("Taux d'Acceptation Moyen", f"{ta_caisse:.1%}", f"{(ta_caisse - ta_prev_caisse):+.1%} WoW")
-            
-            # Comparatif avec le reste de la plateforme (ROI)
-            ta_autres = (tot_acc - tot_acc_caisse) / (tot_req - tot_req_caisse) if (tot_req - tot_req_caisse) > 0 else 0
-            diff_ta = ta_caisse - ta_autres
-            col_kpi_c3.metric("Différentiel vs Non-Équipés", f"{diff_ta:+.1%} vs Autres", delta_color="normal")
-            
-            st.markdown("---")
-            
-            # --- Tableau Détaillé Caisse.ma ---
-            st.markdown("##### 📋 Tableau Détaillé des Intégrations")
-            df_caisse_display = df_compare_caisse[colonnes_finales].copy()
-            
-            for col in ['Success Rate', 'Taux Acceptation', 'Taux Cancellation', 'wow delivered %', 'wow T.A', 'wow Cancellation']:
-                df_caisse_display[col] = df_caisse_display[col].apply(lambda x: f"{x:+.1%}")
-            for col in ['GMV', 'AOV', 'Commission', 'Promo_Restaurant', 'Promo_Admin', 'LR_LG_Costs', 'wow GMV', 'Wow CA', 'Wow AOV', 'Wow Promo Order', 'Wow LR_LG_Costs']:
-                df_caisse_display[col] = df_caisse_display[col].apply(lambda x: f"{x:,.1f}")
+        df_caisse_comp = resto_comp[resto_comp['Restaurant ID'].isin(df_caisse['Restaurant ID'])]
+        st.dataframe(df_caisse_comp[['Restaurant Name', 'Requested', 'WoW Req %', 'GMV', 'WoW GMV %', 'Success Rate', 'WoW SR']].style.format({'WoW Req %': '{:+.1%}', 'GMV': '{:,.0f}', 'WoW GMV %': '{:+.1%}', 'Success Rate': '{:.1%}', 'WoW SR': '{:+.1%}'}), hide_index=True, use_container_width=True)
 
-            st.dataframe(df_caisse_display, use_container_width=True, hide_index=True)
-            
-            # --- Graphique d'impact ---
-            st.markdown("##### 📉 Taux d'Acceptation des intégrés")
-            fig_caisse = px.bar(df_compare_caisse.sort_values(by="Taux Acceptation", ascending=False), 
-                                x="Restaurant Name", y="Taux Acceptation", color="Area", 
-                                title="Performance T.A par Partenaire Intégré")
-            st.plotly_chart(fig_caisse, use_container_width=True)
+# ----------------------------------------
+# ONGLET 6 : NEW RESTAURANTS
+# ----------------------------------------
+with tabs[5]:
+    st.markdown("#### ✨ Performances Nouveaux Restaurants")
+    if df_new.empty:
+        st.warning("Fichier `NewRestaurants.csv` introuvable.")
+    else:
+        df_new_comp = resto_comp[resto_comp['Restaurant ID'].isin(df_new['Restaurant ID'])]
+        st.markdown("**KPIs & Opérations de Livraison**")
+        st.dataframe(df_new_comp[['Restaurant Name', 'Requested', 'Delivered', 'Success Rate', 'GMV']].style.format({'Success Rate': '{:.1%}', 'GMV': '{:,.0f}'}), hide_index=True, use_container_width=True)
+
+# ----------------------------------------
+# ONGLET 7 : INACTIFS
+# ----------------------------------------
+with tabs[6]:
+    st.markdown("#### 👻 Surveillances des Inactifs (Zero Commandes)")
+    
+    jours_inactifs = st.radio("Seuil d'inactivité :", [3, 7, 15, 30, 90], format_func=lambda x: f"Derniers {x} jours", horizontal=True)
+    
+    max_date = df_merged['order day'].max()
+    threshold_date = max_date - timedelta(days=jours_inactifs)
+    
+    # Commandes dans la fenêtre
+    df_window = df_merged[df_merged['order day'] >= threshold_date]
+    restos_actifs = df_window['Restaurant ID'].unique()
+    
+    # Comparaison avec la liste attendue (Config complète)
+    restos_inactifs = liste_attendue[~liste_attendue['Restaurant ID'].isin(restos_actifs)]
+    
+    st.error(f"⚠️ **{len(restos_inactifs)} restaurants** n'ont reçu aucune commande sur les {jours_inactifs} derniers jours !")
+    st.dataframe(restos_inactifs[['Restaurant Name', 'Restaurant ID']], hide_index=True, use_container_width=True)
