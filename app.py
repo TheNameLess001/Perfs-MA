@@ -46,7 +46,7 @@ try:
     with st.spinner('Traitement des données en cours...'):
         df_data = pd.read_csv(fichier_data)
         
-        # Standardisation de la colonne Restaurant Name
+        # Standardisation
         if "restaurant name" in df_data.columns:
             df_data.rename(columns={"restaurant name": "Restaurant Name"}, inplace=True)
 
@@ -63,7 +63,18 @@ try:
             df_merged['Segment'] = 'Global'
             liste_attendue = df_merged[['Restaurant ID', 'Restaurant Name']].drop_duplicates()
 
-        # Lecture sécurisée des fichiers annexes
+        # -----------------------------------------------------
+        # 🚨 EXCLUSION GLOBALE DES RESTAURANTS TEST / FIXES
+        # -----------------------------------------------------
+        mots_exclus = ['test', 'restau fixe', 'restau avance']
+        pattern_exclus = '|'.join(mots_exclus)
+        
+        # On nettoie la base de données des commandes
+        df_merged = df_merged[~df_merged['Restaurant Name'].str.contains(pattern_exclus, case=False, na=False)]
+        # On nettoie la liste officielle du pipeline
+        liste_attendue = liste_attendue[~liste_attendue['Restaurant Name'].str.contains(pattern_exclus, case=False, na=False)]
+
+        # Lecture sécurisée des fichiers annexes (Caisse et Nouveaux)
         try: df_caisse = pd.read_csv("CaisseMA.csv", sep=None, engine='python')
         except: df_caisse = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name'])
         
@@ -136,7 +147,7 @@ def compare_wow(df_curr, df_prev, merge_on):
     df_comp['Wow Promo Order'] = (df_comp['Promo_Restaurant'] + df_comp['Promo_Admin']) - (df_comp['Promo_Restaurant_prev'] + df_comp['Promo_Admin_prev'])
     df_comp['Wow LR_LG_Costs'] = df_comp['LR_LG_Costs'] - df_comp['LR_LG_Costs_prev']
     
-    # Segmentation par Tier
+    # Segmentation par Tier (A, B, C)
     if not df_comp.empty and 'GMV' in df_comp.columns:
         df_comp['Tier'] = pd.qcut(df_comp['GMV'].rank(method='first'), q=[0, 0.4, 0.8, 1.0], labels=['Tier C', 'Tier B', 'Tier A'])
     else:
@@ -328,6 +339,20 @@ with tabs[3]:
         st.dataframe(df_reg[cols_to_show].style.format({'Taux Acceptation': '{:.1%}', 'wow T.A': '{:+.1%}'}), hide_index=True, use_container_width=True)
 
 # ----------------------------------------
+# ONGLET 5 ET 6 : HELPER FONCTION POUR VUE EXHAUSTIVE (0 COMMANDES)
+# ----------------------------------------
+def merge_external_list(df_external, expected_list, comp_df):
+    """Permet de forcer l'affichage de TOUS les restaurants d'une liste (ex: Caisse ou New), même ceux à 0 commande"""
+    valid_list = pd.merge(df_external[['Restaurant ID']], expected_list[['Restaurant ID', 'Restaurant Name']], on='Restaurant ID', how='inner')
+    res = pd.merge(valid_list, comp_df.drop(columns=['Restaurant Name'], errors='ignore'), on='Restaurant ID', how='left')
+    
+    metrics_num = ['Requested', 'Delivered', 'GMV', 'wow GMV', 'wow GMV %', 'Success Rate', 'Taux Acceptation', 'wow delivered %']
+    for m in metrics_num:
+        if m in res.columns: res[m] = res[m].fillna(0)
+    if 'Area' in res.columns: res['Area'] = res['Area'].fillna('Aucune Cmd')
+    return res
+
+# ----------------------------------------
 # ONGLET 5 : CAISSE.MA
 # ----------------------------------------
 with tabs[4]:
@@ -335,10 +360,12 @@ with tabs[4]:
     if df_caisse.empty:
         st.warning("⚠️ Fichier `CaisseMA.csv` introuvable. Uploadez-le à la racine du projet.")
     else:
-        df_caisse_comp = resto_comp[resto_comp['Restaurant ID'].isin(df_caisse['Restaurant ID'])]
+        df_caisse_comp = merge_external_list(df_caisse, liste_attendue, resto_comp)
+        
         if df_caisse_comp.empty:
             st.info("Aucun restaurant de cette vue n'est équipé de Caisse.ma.")
         else:
+            st.success(f"📍 Affichage exhaustif : **{len(df_caisse_comp)} restaurants** Caisse.ma dans ce périmètre.")
             st.dataframe(df_caisse_comp[['Restaurant Name', 'Area', 'Requested', 'wow delivered %', 'GMV', 'wow GMV %', 'Taux Acceptation', 'Success Rate']].style.format({
                 'wow delivered %': '{:+.1%}', 'GMV': '{:,.0f}', 'wow GMV %': '{:+.1%}', 'Taux Acceptation': '{:.1%}', 'Success Rate': '{:.1%}'
             }), hide_index=True, use_container_width=True)
@@ -351,10 +378,15 @@ with tabs[5]:
     if df_new.empty:
         st.warning("⚠️ Fichier `NewRestaurants.csv` introuvable. Uploadez-le à la racine du projet.")
     else:
-        df_new_comp = resto_comp[resto_comp['Restaurant ID'].isin(df_new['Restaurant ID'])]
-        st.dataframe(df_new_comp[['Restaurant Name', 'Area', 'Requested', 'Delivered', 'Success Rate', 'Taux Acceptation', 'GMV', 'wow GMV']].style.format({
-            'Success Rate': '{:.1%}', 'Taux Acceptation': '{:.1%}', 'GMV': '{:,.0f}', 'wow GMV': '{:+,.0f}'
-        }), hide_index=True, use_container_width=True)
+        df_new_comp = merge_external_list(df_new, liste_attendue, resto_comp)
+        
+        if df_new_comp.empty:
+            st.info("Aucun nouveau restaurant dans ce périmètre.")
+        else:
+            st.success(f"📍 Affichage exhaustif : **{len(df_new_comp)} Nouveaux Restaurants** dans ce périmètre.")
+            st.dataframe(df_new_comp[['Restaurant Name', 'Area', 'Requested', 'Delivered', 'Success Rate', 'Taux Acceptation', 'GMV', 'wow GMV']].style.format({
+                'Success Rate': '{:.1%}', 'Taux Acceptation': '{:.1%}', 'GMV': '{:,.0f}', 'wow GMV': '{:+,.0f}'
+            }), hide_index=True, use_container_width=True)
 
 # ----------------------------------------
 # ONGLET 7 : INACTIFS
@@ -376,22 +408,17 @@ with tabs[6]:
         st.dataframe(restos_inactifs[['Restaurant Name']], hide_index=True, use_container_width=True)
 
 # ----------------------------------------
-# ONGLET 8 : PRODUITS HÉROS (NOUVEAU)
+# ONGLET 8 : PRODUITS HÉROS
 # ----------------------------------------
 with tabs[7]:
     st.markdown(f"#### 🏆 Produits Héros - Les Meilleures Ventes ({semaine_selectionnee})")
-    
     if 'Food Item' in df_current.columns:
-        # Nettoyage de la colonne Food Item (supprime les crochets [] et quantités {x})
         df_items = df_current.copy()
         df_items['Clean_Item'] = df_items['Food Item'].astype(str).str.replace(r'\[|\]|\{\d+\}', '', regex=True)
-        
-        # Séparation s'il y a plusieurs produits par commande séparés par des virgules
         df_items = df_items.assign(Item=df_items['Clean_Item'].str.split(',')).explode('Item')
         df_items['Item'] = df_items['Item'].str.strip()
         df_items = df_items[(df_items['Item'] != 'nan') & (df_items['Item'] != '')]
 
-        # Calcul Global
         top_items = df_items['Item'].value_counts().reset_index()
         top_items.columns = ['Produit', 'Nombre de Commandes']
         
@@ -400,7 +427,7 @@ with tabs[7]:
             st.markdown("**📊 Top 15 Global**")
             st.dataframe(top_items.head(15), use_container_width=True, hide_index=True)
         with col_p2:
-            fig_items = px.bar(top_items.head(10), x='Nombre de Commandes', y='Produit', orientation='h', title="Top 10 Produits (Global)", color_discrete_sequence=['#2ecc71'])
+            fig_items = px.bar(top_items.head(10), x='Nombre de Commandes', y='Produit', orientation='h', title="Top 10 Produits", color_discrete_sequence=['#2ecc71'])
             fig_items.update_layout(yaxis={'categoryorder':'total ascending'})
             st.plotly_chart(fig_items, use_container_width=True)
             
@@ -409,20 +436,17 @@ with tabs[7]:
         if 'city' in df_items.columns:
             city_items = df_items.groupby(['city', 'Item']).size().reset_index(name='Nombre')
             city_items = city_items.sort_values(['city', 'Nombre'], ascending=[True, False])
-            # On garde les 5 meilleurs produits par ville
             top_city_items = city_items.groupby('city').head(5).reset_index(drop=True)
             st.dataframe(top_city_items, use_container_width=True, hide_index=True)
     else:
-        st.warning("⚠️ La colonne 'Food Item' est introuvable dans votre fichier de données.")
+        st.warning("⚠️ La colonne 'Food Item' est introuvable.")
 
 # ----------------------------------------
-# ONGLET 9 : CATÉGORIES FOOD (NOUVEAU)
+# ONGLET 9 : CATÉGORIES FOOD
 # ----------------------------------------
 with tabs[8]:
     st.markdown(f"#### 🍕 Performances des Catégories de Food ({semaine_selectionnee})")
-    
     if 'Food Category' in df_current.columns:
-        # Nettoyage léger des catégories
         df_current['Food Category'] = df_current['Food Category'].astype(str).str.replace(r'\[|\]|/', '', regex=True).str.strip()
         df_current_cat = df_current[df_current['Food Category'] != 'nan']
 
@@ -434,10 +458,10 @@ with tabs[8]:
         
         col_cat1, col_cat2 = st.columns(2)
         with col_cat1:
-            fig_cat_req = px.pie(df_cat_disp.head(10), names='Food Category', values='Requested', title="Répartition par Volume de Commandes", hole=0.4)
+            fig_cat_req = px.pie(df_cat_disp.head(10), names='Food Category', values='Requested', title="Répartition par Volume", hole=0.4)
             st.plotly_chart(fig_cat_req, use_container_width=True)
         with col_cat2:
-            fig_cat_gmv = px.bar(df_cat_disp.sort_values('GMV', ascending=False).head(10), x='Food Category', y='GMV', title="Top 10 Catégories Génératrices de GMV", color='Food Category')
+            fig_cat_gmv = px.bar(df_cat_disp.sort_values('GMV', ascending=False).head(10), x='Food Category', y='GMV', title="Top 10 Catégories (GMV)", color='Food Category')
             st.plotly_chart(fig_cat_gmv, use_container_width=True)
             
         st.markdown("**📋 Tableau Détaillé par Catégorie**")
@@ -446,4 +470,4 @@ with tabs[8]:
         
         st.dataframe(df_cat_disp[['Food Category', 'Requested', 'Delivered', 'Success Rate', 'GMV', 'AOV']], use_container_width=True, hide_index=True)
     else:
-        st.warning("⚠️ La colonne 'Food Category' est introuvable dans votre fichier de données.")
+        st.warning("⚠️ La colonne 'Food Category' est introuvable.")
