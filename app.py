@@ -730,8 +730,8 @@ with tabs[8]:
         
         df_cat_disp = df_cat.sort_values('Requested', ascending=False)
         c_c1, c_c2 = st.columns(2)
-with c_c1: st.plotly_chart(px.pie(df_cat_disp.head(10), names='Food Category', values='Requested', hole=0.4), use_container_width=True, key="cat_pie_chart")
-with c_c2: st.plotly_chart(px.bar(df_cat_disp.sort_values('GMV', ascending=False).head(10), x='Food Category', y='GMV'), use_container_width=True, key="cat_bar_chart")
+            with c_c1: st.plotly_chart(px.pie(df_cat_disp.head(10), names='Food Category', values='Requested', hole=0.4), use_container_width=True, key="cat_pie_chart")
+            with c_c2: st.plotly_chart(px.bar(df_cat_disp.sort_values('GMV', ascending=False).head(10), x='Food Category', y='GMV'), use_container_width=True, key="cat_bar_chart")
         
         st.dataframe(df_cat_disp[['Food Category', 'Requested', 'Delivered', 'Success Rate', 'GMV', 'AOV']].style.format({'Success Rate': '{:.1%}', 'GMV': '{:,.0f}', 'AOV': '{:,.0f}'}), hide_index=True, use_container_width=True)
 
