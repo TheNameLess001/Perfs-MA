@@ -258,7 +258,8 @@ def get_metrics_with_zeroes(df_subset, expected_base):
     res = pd.merge(expected_base, metrics, on='Restaurant ID', how='left').fillna(0)
     return res
 
-mapping_area = df_merged[['Restaurant ID', 'Area', 'city']].dropna().drop_duplicates('Restaurant ID')
+# --- MAPPING AREA SÉCURISÉ (Ne supprime plus les restos si ville/area est vide) ---
+mapping_area = df_merged[['Restaurant ID', 'Area', 'city']].dropna(subset=['Restaurant ID']).drop_duplicates('Restaurant ID')
 liste_base_overview = pd.merge(liste_attendue, mapping_area, on='Restaurant ID', how='left')
 liste_base_overview['Area'] = liste_base_overview['Area'].fillna('Aucune Cmd')
 liste_base_overview['city'] = liste_base_overview['city'].fillna('Inconnu')
