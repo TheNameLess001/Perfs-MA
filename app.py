@@ -94,17 +94,30 @@ if not fichiers_disponibles:
 # 3. MOTEUR DE FUSION TOTALE DES FICHIERS
 # ==========================================
 @st.cache_data(show_spinner=False)
+# ==========================================
+# 3. MOTEUR DE FUSION TOTALE DES FICHIERS
+# ==========================================
+@st.cache_data(show_spinner=False)
 def load_all_drive_csvs(files):
     dfs = []
     for f in files:
         req = drive_service.files().get_media(fileId=f['id'])
-        fh, downloader = io.BytesIO(), MediaIoBaseDownload(io.BytesIO(), req)
+        fh = io.BytesIO()  # CORRECTION : On utilise bien le MÊME fichier virtuel
+        downloader = MediaIoBaseDownload(fh, req)
         done = False
-        while not done: _, done = downloader.next_chunk()
+        while not done: 
+            _, done = downloader.next_chunk()
         fh.seek(0)
-        df = pd.read_csv(fh)
-        if "restaurant name" in df.columns: df.rename(columns={"restaurant name": "Restaurant Name"}, inplace=True)
-        dfs.append(df)
+        
+        try:
+            df = pd.read_csv(fh)
+            if not df.empty:
+                if "restaurant name" in df.columns: 
+                    df.rename(columns={"restaurant name": "Restaurant Name"}, inplace=True)
+                dfs.append(df)
+        except pd.errors.EmptyDataError:
+            pass # CORRECTION : Si un fichier sur Drive est vide, on l'ignore sans crasher
+            
     return pd.concat(dfs, ignore_index=True).drop_duplicates(subset=['order id']) if dfs else pd.DataFrame()
 
 col_am, col_info = st.columns([1, 2])
