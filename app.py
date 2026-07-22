@@ -212,9 +212,14 @@ def compare_wow(df_curr, df_prev, merge_on):
     df_comp['Wow LR_LG_Costs'] = df_comp['LR_LG_Costs'] - df_comp['LR_LG_Costs_prev']
     
     if not df_comp.empty and 'GMV' in df_comp.columns:
-        df_comp['Tier'] = pd.qcut(df_comp['GMV'].rank(method='first'), q=[0, 0.4, 0.8, 1.0], labels=['Tier C', 'Tier B', 'Tier A'])
+        # CORRECTION : Protection s'il y a moins de 3 lignes (ex: seulement 1 ou 2 villes)
+        if len(df_comp) >= 3:
+            df_comp['Tier'] = pd.qcut(df_comp['GMV'].rank(method='first'), q=[0, 0.4, 0.8, 1.0], labels=['Tier C', 'Tier B', 'Tier A'])
+        else:
+            df_comp['Tier'] = 'Non classé'
     else:
         df_comp['Tier'] = "N/A"
+        
     return df_comp
 
 def merge_external_list(df_external, expected_list, comp_df):
