@@ -471,7 +471,7 @@ with tabs[1]:
     for c in ['Success Rate', 'Taux Acceptation', 'wow T.A', 'wow GMV %']: df_disp[c] = df_disp[c].apply(lambda x: f"{x:+.1%}")
     for c in ['GMV']: df_disp[c] = df_disp[c].apply(lambda x: f"{x:,.0f}")
 
-    event = st.dataframe(df_disp, column_config={"Restaurant ID": None}, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
+    event = st.dataframe(df_disp, column_config={"Restaurant ID": None}, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row", key="overview_table_select")
     if event.selection.rows:
         st.session_state.popup_entity_type = 'Restaurant'
         st.session_state.popup_entity_id = df_disp.iloc[event.selection.rows[0]]['Restaurant ID']
@@ -601,7 +601,7 @@ with tabs[1]:
     for c in ['Success Rate', 'Taux Acceptation', 'wow T.A', 'wow GMV %']: df_disp[c] = df_disp[c].apply(lambda x: f"{x:+.1%}")
     for c in ['GMV']: df_disp[c] = df_disp[c].apply(lambda x: f"{x:,.0f}")
 
-    event = st.dataframe(df_disp, column_config={"Restaurant ID": None}, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
+    event = st.dataframe(df_disp, column_config={"Restaurant ID": None}, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row", key="overview_table_select")
     if event.selection.rows:
         st.session_state.popup_resto_id = df_disp.iloc[event.selection.rows[0]]['Restaurant ID']
         st.session_state.popup_resto_name = df_disp.iloc[event.selection.rows[0]]['Restaurant Name']
