@@ -651,7 +651,7 @@ def is_new_selection(key, selection_rows):
     curr = selection_rows if selection_rows else []
     st.session_state[prev_key] = curr
     return curr != prev and len(curr) > 0
-    
+
 # ----------------------------------------
 # ONGLET 1 : ANALYSE GLOBAL (MACRO)
 # ----------------------------------------
@@ -663,17 +663,24 @@ with tabs[0]:
 
     df_macro = df_macro_base.groupby('Période').agg(
         Reçu=('order id', 'count'), Livré=('status', lambda x: (x == 'Delivered').sum()),
-        GMV=('item total', lambda x: x[df_macro_base.loc[x.index, 'status'] == 'Delivered'].sum()),
-        CA=('admin earnings', lambda x: x[df_macro_base.loc[x.index, 'status'] == 'Delivered'].sum())
+        GMV=('item total', lambda x: x[df_macro_base.loc[x.index, 'status'] == 'Delivered'].sum() if 'item total' in df_macro_base.columns else 0),
+        CA=('admin earnings', lambda x: x[df_macro_base.loc[x.index, 'status'] == 'Delivered'].sum() if 'admin earnings' in df_macro_base.columns else 0)
     ).reset_index()
+
+    for col in ['Reçu', 'Livré', 'GMV', 'CA']:
+        df_macro[col] = pd.to_numeric(df_macro[col], errors='coerce').fillna(0)
 
     df_macro['AOV'] = (df_macro['GMV'] / df_macro['Livré'].replace(0, np.nan)).fillna(0)
     df_macro = df_macro.sort_values(by='Période', ascending=True)
 
-    for col in ['Reçu', 'Livré', 'GMV', 'CA', 'AOV']: df_macro[f'V. {col}'] = df_macro[col].pct_change()
+    for col in ['Reçu', 'Livré', 'GMV', 'CA', 'AOV']: 
+        df_macro[f'V. {col}'] = df_macro[col].pct_change()
+        
     df_macro_display = df_macro.sort_values(by='Période', ascending=False).copy()
-    for col in ['V. Reçu', 'V. Livré', 'V. GMV', 'V. CA', 'V. AOV']: df_macro_display[col] = df_macro_display[col].apply(lambda x: f"{x:+.1%}" if pd.notnull(x) else "-")
-    for col in ['GMV', 'CA', 'AOV']: df_macro_display[col] = df_macro_display[col].apply(lambda x: f"{x:,.2f}")
+    for col in ['V. Reçu', 'V. Livré', 'V. GMV', 'V. CA', 'V. AOV']: 
+        df_macro_display[col] = df_macro_display[col].apply(lambda x: f"{x:+.1%}" if pd.notnull(x) else "-")
+    for col in ['GMV', 'CA', 'AOV']: 
+        df_macro_display[col] = df_macro_display[col].apply(lambda x: f"{x:,.2f}")
 
     disp_macro = df_macro_display[['Période', 'Reçu', 'Livré', 'GMV', 'CA', 'AOV', 'V. Reçu', 'V. Livré', 'V. GMV', 'V. CA', 'V. AOV']]
     ev_macro = st.dataframe(disp_macro, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row", key="macro_table_select")
@@ -736,6 +743,7 @@ with tabs[0]:
             st.session_state.popup_entity_type = 'Area'
             st.session_state.popup_entity_id = val_area
             st.session_state.popup_entity_name = f"Zone : {val_area}"
+
 # ----------------------------------------
 # ONGLET 2 : OVERVIEW PIPELINE
 # ----------------------------------------
@@ -769,20 +777,25 @@ with tabs[1]:
 # ----------------------------------------
 with tabs[2]:
     st.markdown("#### ❌ Surveillance des Annulations")
-    df_canc_curr = df_current[df_current['status'].str.contains('Cancelled', case=False, na=False)]
+    df_canc_curr = df_current[df_current['status'].str.contains('Cancelled', case=False, na=False)] if 'status' in df_current.columns else pd.DataFrame()
     
     col_c1, col_c2 = st.columns([1, 2])
     with col_c1:
         st.markdown("**Comparatif par Area**")
-        if 'Area' in df_canc_curr.columns:
+        if 'Area' in df_canc_curr.columns and not df_canc_curr.empty:
             canc_area = df_canc_curr.groupby('Area').size().reset_index(name='Annulations')
             m_area = pd.merge(canc_area, df_current.groupby('Area').size().reset_index(name='Total Req'), on='Area')
-            m_area['% Cancel'] = m_area['Annulations'] / m_area['Total Req']
+            
+            # SÉCURITÉ TYPE NUMÉRIQUE
+            m_area['Annulations'] = pd.to_numeric(m_area['Annulations'], errors='coerce').fillna(0)
+            m_area['Total Req'] = pd.to_numeric(m_area['Total Req'], errors='coerce').fillna(0)
+            
+            m_area['% Cancel'] = (m_area['Annulations'] / m_area['Total Req'].replace(0, np.nan)).fillna(0)
             st.dataframe(m_area.sort_values('% Cancel', ascending=False).head(10).style.format({'% Cancel': '{:.1%}'}), hide_index=True)
             
     with col_c2:
         st.markdown("**Motifs d'Annulations**")
-        if not df_canc_curr.empty:
+        if not df_canc_curr.empty and 'cancellation reason ' in df_canc_curr.columns:
             reasons = df_canc_curr['cancellation reason '].value_counts().reset_index()
             reasons.columns = ['Motif', 'Nombre']
             st.plotly_chart(px.pie(reasons, names='Motif', values='Nombre', hole=0.4), use_container_width=True, key="canc_pie_chart")
@@ -797,21 +810,37 @@ with tabs[2]:
 with tabs[3]:
     st.markdown("#### 🤖 Automatisation")
     if 'Accepted By' in df_current.columns:
-        df_current['Is_Auto'] = df_current['Accepted By'].str.contains('restaurant', case=False, na=False)
-        auto_r = df_current.groupby('Is_Auto').agg(Req=('order id', 'count'), Del=('status', lambda x: (x == 'Delivered').sum()), GMV=('item total', lambda x: x[df_current.loc[x.index, 'status'] == 'Delivered'].sum())).reset_index()
+        df_current['Is_Auto'] = df_current['Accepted By'].astype(str).str.contains('restaurant', case=False, na=False)
+        auto_r = df_current.groupby('Is_Auto').agg(
+            Req=('order id', 'count'), 
+            Del=('status', lambda x: (x == 'Delivered').sum() if 'status' in df_current.columns else 0), 
+            GMV=('item total', lambda x: x[df_current.loc[x.index, 'status'] == 'Delivered'].sum() if ('item total' in df_current.columns and 'status' in df_current.columns) else 0)
+        ).reset_index()
+
+        # CONVERSION NUMÉRIQUE SÉCURISÉE (ÉVITE LE TYPEERROR SUR DIVISION PYARROW)
+        for col in ['Req', 'Del', 'GMV']:
+            auto_r[col] = pd.to_numeric(auto_r[col], errors='coerce').fillna(0)
+
         auto_r['Type'] = auto_r['Is_Auto'].map({True: '🤖 Automatisé', False: '👨‍💻 Manuel'})
-        auto_r['Success Rate'] = (auto_r['Del'] / auto_r['Req']).fillna(0)
+        req_safe = auto_r['Req'].replace(0, np.nan)
+        auto_r['Success Rate'] = (auto_r['Del'] / req_safe).fillna(0)
+        
         st.dataframe(auto_r[['Type', 'Req', 'Del', 'Success Rate', 'GMV']].style.format({'Success Rate': '{:.1%}', 'GMV': '{:,.0f}'}), hide_index=True)
     
     st.markdown("---")
     col_acc, col_reg = st.columns(2)
-    with col_acc: st.success("**🚀 Accélérations**"); st.dataframe(resto_comp[resto_comp['wow T.A'] > 0].sort_values('wow T.A', ascending=False).head(10)[['Restaurant Name', 'Requested', 'Taux Acceptation', 'wow T.A']].style.format({'Taux Acceptation': '{:.1%}', 'wow T.A': '{:+.1%}'}), hide_index=True)
-    with col_reg: st.error("**⚠️ Régressions**"); st.dataframe(resto_comp[resto_comp['wow T.A'] < 0].sort_values('wow T.A', ascending=True).head(10)[['Restaurant Name', 'Requested', 'Taux Acceptation', 'wow T.A']].style.format({'Taux Acceptation': '{:.1%}', 'wow T.A': '{:+.1%}'}), hide_index=True)
+    with col_acc: 
+        st.success("**🚀 Accélérations**")
+        st.dataframe(resto_comp[resto_comp['wow T.A'] > 0].sort_values('wow T.A', ascending=False).head(10)[['Restaurant Name', 'Requested', 'Taux Acceptation', 'wow T.A']].style.format({'Taux Acceptation': '{:.1%}', 'wow T.A': '{:+.1%}'}), hide_index=True)
+    with col_reg: 
+        st.error("**⚠️ Régressions**")
+        st.dataframe(resto_comp[resto_comp['wow T.A'] < 0].sort_values('wow T.A', ascending=True).head(10)[['Restaurant Name', 'Requested', 'Taux Acceptation', 'wow T.A']].style.format({'Taux Acceptation': '{:.1%}', 'wow T.A': '{:+.1%}'}), hide_index=True)
 
 def merge_ext(df_ext, comp):
     res = pd.merge(pd.merge(df_ext[['Restaurant ID']], liste_attendue, on='Restaurant ID', how='inner'), comp.drop(columns=['Restaurant Name'], errors='ignore'), on='Restaurant ID', how='left')
     for m in ['Requested', 'Delivered', 'GMV', 'wow GMV', 'wow GMV %', 'Success Rate', 'Taux Acceptation', 'wow delivered %']:
-        if m in res.columns: res[m] = res[m].fillna(0)
+        if m in res.columns: 
+            res[m] = pd.to_numeric(res[m], errors='coerce').fillna(0)
     return res
 
 # ----------------------------------------
@@ -887,6 +916,11 @@ with tabs[8]:
         df_current_cat = df_current[df_current['Food Category'].astype(str) != 'nan'].copy()
         df_current_cat['Food Category'] = df_current_cat['Food Category'].astype(str).str.replace(r'\[|\]|/', '', regex=True).str.strip()
         df_cat = compute_metrics(df_current_cat, ['Food Category'])
+        
+        for col in ['Requested', 'Delivered', 'GMV']:
+            if col in df_cat.columns:
+                df_cat[col] = pd.to_numeric(df_cat[col], errors='coerce').fillna(0)
+
         df_cat['Success Rate'] = (df_cat['Delivered'] / df_cat['Requested'].replace(0, np.nan)).fillna(0)
         df_cat['AOV'] = (df_cat['GMV'] / df_cat['Delivered'].replace(0, np.nan)).fillna(0)
         
