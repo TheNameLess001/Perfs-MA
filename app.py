@@ -699,10 +699,10 @@ with tabs[6]:
     st.dataframe(restos_inactifs[['Restaurant Name']], hide_index=True)
 
 # ----------------------------------------
-# ONGLETS 8 & 9 : Héros & Catégories
+# ONGLETS 8 & 9 : Héros & Catégories (Nettoyé & Cliquable)
 # ----------------------------------------
 with tabs[7]:
-    st.markdown("#### 🏆 Produits Héros")
+    st.markdown("#### 🏆 Produits Héros (🖱️ Cliquable)")
     if 'Food Item' in df_current.columns:
         df_items = df_current.assign(Item=df_current['Food Item'].astype(str).str.replace(r'\[|\]|\{\d+\}', '', regex=True).str.split(',')).explode('Item')
         df_items['Item'] = df_items['Item'].str.strip()
@@ -711,8 +711,18 @@ with tabs[7]:
         top_items.columns = ['Produit', 'Nombre']
         
         c_p1, c_p2 = st.columns([1, 2])
-        with c_p1: st.dataframe(top_items.head(15), hide_index=True)
-        with c_p2: st.plotly_chart(px.bar(top_items.head(10), x='Nombre', y='Produit', orientation='h', title="Top 10 Global").update_layout(yaxis={'categoryorder':'total ascending'}), use_container_width=True)
+        with c_p1: 
+            ev_p = st.dataframe(top_items.head(15), hide_index=True, on_select="rerun", selection_mode="single-row")
+            if ev_p.selection.rows:
+                st.session_state.popup_entity_type = 'Item'
+                st.session_state.popup_entity_id = top_items.iloc[ev_p.selection.rows[0]]['Produit']
+                st.session_state.popup_entity_name = top_items.iloc[ev_p.selection.rows[0]]['Produit']
+        with c_p2: 
+            st.plotly_chart(
+                px.bar(top_items.head(10), x='Nombre', y='Produit', orientation='h', title="Top 10 Global").update_layout(yaxis={'categoryorder':'total ascending'}), 
+                use_container_width=True, 
+                key="hero_bar_chart"
+            )
         
         st.markdown("##### 📍 Top Produits par Ville")
         if 'city' in df_items.columns:
@@ -720,7 +730,7 @@ with tabs[7]:
             st.dataframe(city_items.groupby('city').head(5).reset_index(drop=True), hide_index=True)
 
 with tabs[8]:
-    st.markdown("#### 🍕 Catégories Food")
+    st.markdown("#### 🍕 Catégories Food (🖱️ Cliquable)")
     if 'Food Category' in df_current.columns:
         df_current_cat = df_current[df_current['Food Category'].astype(str) != 'nan'].copy()
         df_current_cat['Food Category'] = df_current_cat['Food Category'].astype(str).str.replace(r'\[|\]|/', '', regex=True).str.strip()
@@ -729,11 +739,33 @@ with tabs[8]:
         df_cat['AOV'] = (df_cat['GMV'] / df_cat['Delivered'].replace(0, np.nan)).fillna(0)
         
         df_cat_disp = df_cat.sort_values('Requested', ascending=False)
-        c_c1, c_c2 = st.columns(2)
-            with c_c1: st.plotly_chart(px.pie(df_cat_disp.head(10), names='Food Category', values='Requested', hole=0.4), use_container_width=True, key="cat_pie_chart")
-            with c_c2: st.plotly_chart(px.bar(df_cat_disp.sort_values('GMV', ascending=False).head(10), x='Food Category', y='GMV'), use_container_width=True, key="cat_bar_chart")
+        disp_cat = df_cat_disp[['Food Category', 'Requested', 'Delivered', 'Success Rate', 'GMV', 'AOV']].copy()
         
-        st.dataframe(df_cat_disp[['Food Category', 'Requested', 'Delivered', 'Success Rate', 'GMV', 'AOV']].style.format({'Success Rate': '{:.1%}', 'GMV': '{:,.0f}', 'AOV': '{:,.0f}'}), hide_index=True, use_container_width=True)
+        c_c1, c_c2 = st.columns(2)
+        with c_c1: 
+            st.plotly_chart(
+                px.pie(df_cat_disp.head(10), names='Food Category', values='Requested', hole=0.4), 
+                use_container_width=True, 
+                key="cat_pie_chart"
+            )
+        with c_c2: 
+            st.plotly_chart(
+                px.bar(df_cat_disp.sort_values('GMV', ascending=False).head(10), x='Food Category', y='GMV'), 
+                use_container_width=True, 
+                key="cat_bar_chart"
+            )
+        
+        ev_cat = st.dataframe(
+            disp_cat.style.format({'Success Rate': '{:.1%}', 'GMV': '{:,.0f}', 'AOV': '{:,.0f}'}), 
+            hide_index=True, 
+            use_container_width=True, 
+            on_select="rerun", 
+            selection_mode="single-row"
+        )
+        if ev_cat.selection.rows:
+            st.session_state.popup_entity_type = 'Category'
+            st.session_state.popup_entity_id = disp_cat.iloc[ev_cat.selection.rows[0]]['Food Category']
+            st.session_state.popup_entity_name = disp_cat.iloc[ev_cat.selection.rows[0]]['Food Category']
 
 # ==========================================
 # GESTION SÉCURISÉE DU POPUP (Fin du fichier)
