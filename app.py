@@ -94,8 +94,26 @@ if not fichiers_disponibles:
     st.stop()
 
 # ==========================================
-# 3. MOTEUR DE FUSION TOTALE DES FICHIERS
+# 3. MOTEUR DE FUSION TOTALE DES FICHIERS & REFERENTIEL
 # ==========================================
+
+# --- CHARGEMENT DU SHEET CENTRAL RST_list ---
+@st.cache_data(ttl=600)
+def load_rst_list_gsheets():
+    try:
+        sheet_rst = gc.open("RST_list")
+        records = sheet_rst.sheet1.get_all_records()
+        df_rst = pd.DataFrame(records)
+        if not df_rst.empty and 'Restaurant ID' in df_rst.columns:
+            df_rst['Restaurant ID'] = df_rst['Restaurant ID'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+            if 'Restaurant Name' not in df_rst.columns and 'restaurant name' in df_rst.columns:
+                df_rst.rename(columns={'restaurant name': 'Restaurant Name'}, inplace=True)
+        return df_rst
+    except Exception:
+        return pd.DataFrame()
+
+df_rst_master = load_rst_list_gsheets()
+
 @st.cache_data(show_spinner=False)
 def load_all_drive_csvs(files):
     dfs = []
@@ -127,24 +145,49 @@ try:
     with st.spinner("Aspiration et fusion de tout l'historique en cours..."):
         df_merged_full = load_all_drive_csvs(fichiers_disponibles)
         
+        # --- NETTOYAGE HARMONISÉ DES IDs (Format Texte pur sans .0) ---
+        if not df_pipeline_master.empty and 'Restaurant ID' in df_pipeline_master.columns:
+            df_pipeline_master['Restaurant ID'] = df_pipeline_master['Restaurant ID'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+
+        if not df_merged_full.empty and 'Restaurant ID' in df_merged_full.columns:
+            df_merged_full['Restaurant ID'] = df_merged_full['Restaurant ID'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+            df_merged_full = df_merged_full[df_merged_full['Restaurant ID'] != 'nan']
+
         if am_choisi != "Global":
-            # Si un AM est sélectionné (ex: Houda), on filtre sur sa pipeline
-            df_pipe_am = df_pipeline_master[df_pipeline_master['AM_Name'].str.lower() == am_choisi.lower()]
-            liste_attendue = df_pipe_am[['Restaurant ID', 'Restaurant Name']].drop_duplicates(subset=['Restaurant ID'])
+            # Filtrage strict sur la pipeline d'un AM spécifique
+            df_pipe_am = df_pipeline_master[df_pipeline_master['AM_Name'].astype(str).str.lower() == am_choisi.lower()]
+            liste_attendue = df_pipe_am[['Restaurant ID', 'Restaurant Name']].dropna(subset=['Restaurant ID']).drop_duplicates(subset=['Restaurant ID'])
             df_merged = df_merged_full[df_merged_full['Restaurant ID'].isin(liste_attendue['Restaurant ID'])].copy()
         else:
-            # 💡 MODE GLOBAL : Direct et sans chichi, TOUS les restaurants de la data !
-            df_merged = df_merged_full.copy()
-            liste_attendue = df_merged[['Restaurant ID', 'Restaurant Name']].dropna(subset=['Restaurant ID']).drop_duplicates(subset=['Restaurant ID'])
+            # 💡 MODE GLOBAL : Fusion intégrale CRM + CSV + RST_list (Zéro restaurant perdu !)
+            cols = ['Restaurant ID', 'Restaurant Name']
+            
+            l_csv = df_merged_full[cols].dropna(subset=['Restaurant ID']) if not df_merged_full.empty else pd.DataFrame(columns=cols)
+            l_crm = df_pipeline_master[cols].dropna(subset=['Restaurant ID']) if not df_pipeline_master.empty else pd.DataFrame(columns=cols)
+            l_rst = df_rst_master[cols].dropna(subset=['Restaurant ID']) if (not df_rst_master.empty and all(c in df_rst_master.columns for c in cols)) else pd.DataFrame(columns=cols)
 
+            liste_attendue = pd.concat([l_csv, l_crm, l_rst], ignore_index=True).drop_duplicates(subset=['Restaurant ID'])
+            df_merged = df_merged_full.copy()
+
+        # Exclusion des restaurants de test
         pattern_exclus = '|'.join(['test', 'restau fixe', 'restau avance'])
         df_merged = df_merged[~df_merged['Restaurant Name'].astype(str).str.contains(pattern_exclus, case=False, na=False)]
         liste_attendue = liste_attendue[~liste_attendue['Restaurant Name'].astype(str).str.contains(pattern_exclus, case=False, na=False)]
 
-        try: df_caisse = pd.read_csv("CaisseMA.csv", sep=None, engine='python')
-        except: df_caisse = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name'])
-        try: df_new = pd.read_csv("NewRestaurants.csv", sep=None, engine='python')
-        except: df_new = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name'])
+        # Chargement & nettoyage des IDs pour CaisseMA et NewRestaurants
+        try: 
+            df_caisse = pd.read_csv("CaisseMA.csv", sep=None, engine='python')
+            if 'Restaurant ID' in df_caisse.columns:
+                df_caisse['Restaurant ID'] = df_caisse['Restaurant ID'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+        except: 
+            df_caisse = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name'])
+            
+        try: 
+            df_new = pd.read_csv("NewRestaurants.csv", sep=None, engine='python')
+            if 'Restaurant ID' in df_new.columns:
+                df_new['Restaurant ID'] = df_new['Restaurant ID'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+        except: 
+            df_new = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name'])
 
         df_merged['order day'] = pd.to_datetime(df_merged['order day'])
         df_merged['Week'] = "Week " + df_merged['order day'].dt.isocalendar().week.astype(str).str.zfill(2)
@@ -162,7 +205,7 @@ with st.sidebar:
     st.markdown("---")
     st.success(f"**Périmètre :** {am_choisi}")
     st.info(f"**Commandes totales (Historique) :** {len(df_merged):,}")
-
+    
 # ==========================================
 # 4. MOTEUR DE CALCULS & PROTECTION ZERO
 # ==========================================
@@ -346,6 +389,14 @@ def popup_360(entity_type, entity_id, entity_name):
         resto_curr = compute_metrics(c_df, ['Restaurant ID', 'Restaurant Name'])
         resto_prev = compute_metrics(p_df, ['Restaurant ID', 'Restaurant Name'])
         comp_w = compare_wow(resto_curr, resto_prev, ['Restaurant ID', 'Restaurant Name'])
+        
+        c_t, c_f = st.columns(2)
+        with c_t:
+            st.success("🏆 Top 10 Accélérations")
+            st.dataframe(comp_w.sort_values('wow Req', ascending=False).head(10)[['Restaurant Name', 'wow Req', 'wow Req %']].style.format({'wow Req': '{:+,.0f}', 'wow Req %': '{:+.1%}'}), hide_index=True)
+        with c_f:
+            st.error("📉 Flop 10 Chutes")
+            st.dataframe(comp_w.sort_values('wow Req', ascending=True).head(10)[['Restaurant Name', 'wow Req', 'wow Req %']].style.format({'wow Req': '{:+,.0f}', 'wow Req %': '{:+.1%}'}), hide_index=True)
         
         c_t, c_f = st.columns(2)
         with c_t:
