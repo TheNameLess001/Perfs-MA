@@ -594,51 +594,6 @@ if st.session_state.get("popup_entity_id") is not None:
 tabs = st.tabs(["🌍 1. Macro", "📈 2. Overview", "❌ 3. Annul.", "🤖 4. Auto", "💻 5. Caisse", "✨ 6. New", "👻 7. Inactifs", "🏆 8. Héros", "🍕 9. Catégories"])
 
 # ----------------------------------------
-# ONGLET 1 : ANALYSE GLOBAL (MACRO)
-# ----------------------------------------
-with tabs[0]:
-    st.markdown("#### 🌍 Analyse Macro des Performances (Tous les historiques combinés)")
-    vue_temporelle = st.radio("Sélectionnez la vue globale :", ["📊 Par Semaine", "📅 Par Jour"], horizontal=True)
-    df_macro_base = df_merged.copy()
-    df_macro_base['Période'] = df_macro_base['order day'].dt.strftime('%Y-%m-%d') if vue_temporelle == "📅 Par Jour" else df_macro_base['Week']
-
-    df_macro = df_macro_base.groupby('Période').agg(
-        Reçu=('order id', 'count'), Livré=('status', lambda x: (x == 'Delivered').sum()),
-        GMV=('item total', lambda x: x[df_macro_base.loc[x.index, 'status'] == 'Delivered'].sum()),
-        CA=('admin earnings', lambda x: x[df_macro_base.loc[x.index, 'status'] == 'Delivered'].sum())
-    ).reset_index()
-
-    df_macro['AOV'] = (df_macro['GMV'] / df_macro['Livré'].replace(0, np.nan)).fillna(0)
-    df_macro = df_macro.sort_values(by='Période', ascending=True)
-
-    for col in ['Reçu', 'Livré', 'GMV', 'CA', 'AOV']: df_macro[f'V. {col}'] = df_macro[col].pct_change()
-    df_macro_display = df_macro.sort_values(by='Période', ascending=False).copy()
-    for col in ['V. Reçu', 'V. Livré', 'V. GMV', 'V. CA', 'V. AOV']: df_macro_display[col] = df_macro_display[col].apply(lambda x: f"{x:+.1%}" if pd.notnull(x) else "-")
-    for col in ['GMV', 'CA', 'AOV']: df_macro_display[col] = df_macro_display[col].apply(lambda x: f"{x:,.2f}")
-
-    st.dataframe(df_macro_display[['Période', 'Reçu', 'Livré', 'GMV', 'CA', 'AOV', 'V. Reçu', 'V. Livré', 'V. GMV', 'V. CA', 'V. AOV']], use_container_width=True, hide_index=True)
-    
-    st.markdown("---")
-    df_daily = compute_metrics(df_merged, ['order day']).sort_values('order day')
-    col_g1, col_g2 = st.columns(2)
-    with col_g1: st.plotly_chart(px.line(df_daily, x="order day", y="GMV", title="Tendance GMV", markers=True), use_container_width=True)
-    with col_g2: st.plotly_chart(px.line(df_daily, x="order day", y="Requested", title="Tendance Commandes Reçues", markers=True, color_discrete_sequence=['#f39c12']), use_container_width=True)
-    st.markdown("---")
-    
-    city_curr, city_prev = compute_metrics(df_current, ['city']), compute_metrics(df_prev, ['city'])
-    city_comp = compare_wow(city_curr, city_prev, ['city'])
-    area_curr, area_prev = compute_metrics(df_current, ['city', 'Area']), compute_metrics(df_prev, ['city', 'Area'])
-    area_comp = compare_wow(area_curr, area_prev, ['city', 'Area'])
-    
-    col_city, col_area = st.columns(2)
-    with col_city:
-        st.markdown("##### 🏙️ Performances par Ville")
-        st.dataframe(city_comp[['city', 'Requested', 'wow delivered %', 'GMV', 'wow GMV %', 'Success Rate', 'wow T.A']].style.format({'wow delivered %': '{:+.1%}', 'GMV': '{:,.0f}', 'wow GMV %': '{:+.1%}', 'Success Rate': '{:.1%}', 'wow T.A': '{:+.1%}'}), hide_index=True)
-    with col_area:
-        st.markdown("##### 🏘️ Performances par Zone (Area)")
-        st.dataframe(area_comp[['Area', 'Requested', 'wow delivered %', 'GMV', 'wow GMV %', 'Success Rate', 'wow T.A']].sort_values('Requested', ascending=False).head(15).style.format({'wow delivered %': '{:+.1%}', 'GMV': '{:,.0f}', 'wow GMV %': '{:+.1%}', 'Success Rate': '{:.1%}', 'wow T.A': '{:+.1%}'}), hide_index=True)
-
-# ----------------------------------------
 # ONGLET 2 : OVERVIEW PIPELINE
 # ----------------------------------------
 with tabs[1]:
