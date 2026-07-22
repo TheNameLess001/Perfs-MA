@@ -97,15 +97,11 @@ if not fichiers_disponibles:
 # 3. MOTEUR DE FUSION TOTALE DES FICHIERS
 # ==========================================
 @st.cache_data(show_spinner=False)
-# ==========================================
-# 3. MOTEUR DE FUSION TOTALE DES FICHIERS
-# ==========================================
-@st.cache_data(show_spinner=False)
 def load_all_drive_csvs(files):
     dfs = []
     for f in files:
         req = drive_service.files().get_media(fileId=f['id'])
-        fh = io.BytesIO()  # CORRECTION : On utilise bien le MÊME fichier virtuel
+        fh = io.BytesIO()
         downloader = MediaIoBaseDownload(fh, req)
         done = False
         while not done: 
@@ -119,7 +115,7 @@ def load_all_drive_csvs(files):
                     df.rename(columns={"restaurant name": "Restaurant Name"}, inplace=True)
                 dfs.append(df)
         except pd.errors.EmptyDataError:
-            pass # CORRECTION : Si un fichier sur Drive est vide, on l'ignore sans crasher
+            pass
             
     return pd.concat(dfs, ignore_index=True).drop_duplicates(subset=['order id']) if dfs else pd.DataFrame()
 
@@ -192,7 +188,6 @@ def compare_wow(df_curr, df_prev, merge_on):
     df_comp['Taux Cancellation'] = (df_comp['CancelledByRestaurant'] / req_curr_safe).fillna(0)
     df_comp['AOV'] = (df_comp['GMV'] / del_curr_safe).fillna(0)
     
-    # NOUVEAU : Calculs WoW sur les Requests (Commandes Reçues)
     df_comp['wow Req'] = df_comp['Requested'] - df_comp['Requested_prev']
     df_comp['wow Req %'] = (df_comp['Requested'] / req_prev_safe - 1).fillna(0)
     
@@ -232,7 +227,6 @@ df_prev_full = get_metrics_with_zeroes(df_prev, liste_base_overview)
 # ==========================================
 @st.dialog("🔍 Vue 360° Détaillée", width="large")
 def popup_360(entity_type, entity_id, entity_name):
-    # --- 1. FILTRAGE SELON LE TYPE D'ENTITÉ ---
     if entity_type == 'Restaurant':
         df_r = df_merged[df_merged['Restaurant ID'].astype(str) == str(entity_id)].sort_values('order day')
         note_id = str(entity_id)
@@ -243,12 +237,11 @@ def popup_360(entity_type, entity_id, entity_name):
         df_r = df_merged[df_merged['Food Item'].astype(str).str.contains(str(entity_id), regex=False, na=False)].sort_values('order day')
         note_id = f"Item_{entity_id}"
     elif entity_type == 'Week':
-        df_r = df_merged.sort_values('order day') # Pour une semaine, on prend tout pour comparer
+        df_r = df_merged.sort_values('order day')
         note_id = f"Week_{entity_id}"
 
     st.markdown(f"### {'🏪' if entity_type == 'Restaurant' else '📊'} {entity_name}")
     
-    # --- 2. FILTRES TEMPORELS ---
     col_filtre, col_btn = st.columns([2, 1])
     if entity_type == 'Week':
         with col_filtre: st.info(f"Analyse figée sur la {entity_name}")
@@ -278,7 +271,6 @@ def popup_360(entity_type, entity_id, entity_name):
             p_df = pd.DataFrame(columns=df_r.columns)
             label_evo = "Global"
 
-    # --- 3. MOTEUR DE CALCULS DES KPIs ---
     def calc_kpis(df):
         req = len(df)
         df_deliv = df[df['status'] == 'Delivered'].copy()
@@ -311,7 +303,6 @@ def popup_360(entity_type, entity_id, entity_name):
         if prev == 0 and curr == 0: return "-"
         return f"{(curr / prev) - 1:+.1%}"
 
-    # --- 4. BOUTON DE RAPPORT ---
     with col_btn:
         report_text = f"📊 RAPPORT DE PERFORMANCES - {entity_name}\n"
         report_text += f"Période : {choix_periode}\n"
@@ -326,7 +317,6 @@ def popup_360(entity_type, entity_id, entity_name):
 
     st.markdown("---")
     
-    # --- 5. BOXES VIOLETTES ---
     b1, b2, b3 = st.columns(3)
     with b1: st.markdown(f"<div class='purple-box'><h3>Commandes Reçues</h3><h2>{c_req}</h2><p>{label_evo}: {format_evo(c_req, p_req)}</p></div>", unsafe_allow_html=True)
     with b2: st.markdown(f"<div class='purple-box'><h3>Commandes Livrées</h3><h2>{c_del}</h2><p>{label_evo}: {format_evo(c_del, p_del)}</p></div>", unsafe_allow_html=True)
@@ -344,9 +334,8 @@ def popup_360(entity_type, entity_id, entity_name):
     with b8: st.markdown(f"<div class='purple-box'><h3>Temps Livraison</h3><h2>{v_del}</h2><p>{label_evo}: {format_evo(c_dt, p_dt) if v_del != 'N/A' else '-'}</p></div>", unsafe_allow_html=True)
     with b9: st.markdown(f"<div class='purple-box'><h3>Analyse Active</h3><h2>{label_evo}</h2><p>Période sélectionnée</p></div>", unsafe_allow_html=True)
 
-    # --- 6. GRAPHIQUE ET TOP/FLOP (SI SEMAINE) ---
     if entity_type == 'Week':
-        st.markdown("#### 📈 Tops & Flops de la Semaine (Accélération GMV)")
+        st.markdown("#### 📈 Tops & Flops de la Semaine (Requests)")
         resto_curr = compute_metrics(c_df, ['Restaurant ID', 'Restaurant Name'])
         resto_prev = compute_metrics(p_df, ['Restaurant ID', 'Restaurant Name'])
         comp_w = compare_wow(resto_curr, resto_prev, ['Restaurant ID', 'Restaurant Name'])
@@ -354,10 +343,10 @@ def popup_360(entity_type, entity_id, entity_name):
         c_t, c_f = st.columns(2)
         with c_t:
             st.success("🏆 Top 10 Accélérations")
-            st.dataframe(comp_w.sort_values('wow Req', ascending=False).head(10)[['Restaurant Name', 'wow Req', 'wow Req %']].style.format({'wow Req': '{:,.0f}', 'wow Req %': '{:+.1%}'}), hide_index=True)
+            st.dataframe(comp_w.sort_values('wow Req', ascending=False).head(10)[['Restaurant Name', 'wow Req', 'wow Req %']].style.format({'wow Req': '{:+,.0f}', 'wow Req %': '{:+.1%}'}), hide_index=True)
         with c_f:
             st.error("📉 Flop 10 Chutes")
-            st.dataframe(comp_w.sort_values('wow Req', ascending=True).head(10)[['Restaurant Name', 'wow Req', 'wow Req %']].style.format({'wow Req': '{:,.0f}', 'wow Req %': '{:+.1%}'}), hide_index=True)
+            st.dataframe(comp_w.sort_values('wow Req', ascending=True).head(10)[['Restaurant Name', 'wow Req', 'wow Req %']].style.format({'wow Req': '{:+,.0f}', 'wow Req %': '{:+.1%}'}), hide_index=True)
 
     if not c_df.empty or not p_df.empty:
         df_trend = c_df.groupby('order day').agg(Req=('order id','count'), Deliv=('status', lambda x: (x=='Delivered').sum())).reset_index()
@@ -366,7 +355,6 @@ def popup_360(entity_type, entity_id, entity_name):
     
     st.markdown("---")
     
-    # --- 7. NOTES ET SUIVI D'IMPACT ---
     col_act, col_trans = st.columns(2)
     with col_act:
         st.markdown(f"#### 📝 Ajouter une Note ({entity_name})")
@@ -386,7 +374,6 @@ def popup_360(entity_type, entity_id, entity_name):
                     jours = st.radio("Analyse post-action :", [7, 15, 30], format_func=lambda x: f"{x} Jours", horizontal=True, key=f"r_{idx_n}_{note_id}")
                     try:
                         d_note = pd.to_datetime(row['Date']).date()
-                        # Si la note est sur une semaine complète, on compare sur tout le dataset, sinon sur l'entité filtrée
                         base_df = df_merged if entity_type == 'Week' else df_r
                         base_df['date_only'] = base_df['order day'].dt.date
                         avant = base_df[(base_df['date_only'] < d_note) & (base_df['date_only'] >= d_note - timedelta(days=jours))]
@@ -456,8 +443,10 @@ with tabs[0]:
     st.markdown("---")
     df_daily = compute_metrics(df_merged, ['order day']).sort_values('order day')
     col_g1, col_g2 = st.columns(2)
-with col_g1: st.plotly_chart(px.line(df_daily, x="order day", y="GMV", title="Tendance GMV", markers=True), use_container_width=True, key="macro_gmv_chart")
-with col_g2: st.plotly_chart(px.line(df_daily, x="order day", y="Requested", title="Tendance Commandes Reçues", markers=True, color_discrete_sequence=['#f39c12']), use_container_width=True, key="macro_req_chart")
+    with col_g1: 
+        st.plotly_chart(px.line(df_daily, x="order day", y="GMV", title="Tendance GMV", markers=True), use_container_width=True, key="macro_gmv_chart")
+    with col_g2: 
+        st.plotly_chart(px.line(df_daily, x="order day", y="Requested", title="Tendance Commandes Reçues", markers=True, color_discrete_sequence=['#f39c12']), use_container_width=True, key="macro_req_chart")
 
 # ----------------------------------------
 # ONGLET 2 : OVERVIEW PIPELINE
@@ -476,135 +465,6 @@ with tabs[1]:
         st.session_state.popup_entity_type = 'Restaurant'
         st.session_state.popup_entity_id = df_disp.iloc[event.selection.rows[0]]['Restaurant ID']
         st.session_state.popup_entity_name = df_disp.iloc[event.selection.rows[0]]['Restaurant Name']
-
-# ----------------------------------------
-# ONGLET 3 ET 4 : ANNULATIONS & AUTO
-# ----------------------------------------
-with tabs[2]:
-    st.markdown("#### ❌ Surveillance des Annulations")
-    df_canc_curr = df_current[df_current['status'].str.contains('Cancelled', case=False, na=False)]
-    if not df_canc_curr.empty:
-        reasons = df_canc_curr['cancellation reason '].value_counts().reset_index()
-        reasons.columns = ['Motif', 'Nombre']
-        st.plotly_chart(px.pie(reasons, names='Motif', values='Nombre', hole=0.4), use_container_width=True)
-
-with tabs[3]:
-    st.markdown("#### 🤖 Automatisation")
-    if 'Accepted By' in df_current.columns:
-        df_current['Is_Auto'] = df_current['Accepted By'].str.contains('restaurant', case=False, na=False)
-        auto_r = df_current.groupby('Is_Auto').agg(Req=('order id', 'count'), Del=('status', lambda x: (x == 'Delivered').sum()), GMV=('item total', lambda x: x[df_current.loc[x.index, 'status'] == 'Delivered'].sum())).reset_index()
-        auto_r['Type'] = auto_r['Is_Auto'].map({True: '🤖 Automatisé', False: '👨‍💻 Manuel'})
-        auto_r['Success Rate'] = (auto_r['Del'] / auto_r['Req']).fillna(0)
-        st.dataframe(auto_r[['Type', 'Req', 'Del', 'Success Rate', 'GMV']].style.format({'Success Rate': '{:.1%}', 'GMV': '{:,.0f}'}), hide_index=True)
-
-def merge_ext(df_ext, comp):
-    res = pd.merge(pd.merge(df_ext[['Restaurant ID']], liste_attendue, on='Restaurant ID', how='inner'), comp.drop(columns=['Restaurant Name'], errors='ignore'), on='Restaurant ID', how='left')
-    for m in ['Requested', 'Delivered', 'GMV', 'wow GMV', 'wow GMV %', 'Success Rate', 'Taux Acceptation', 'wow delivered %']:
-        if m in res.columns: res[m] = res[m].fillna(0)
-    return res
-
-# ----------------------------------------
-# ONGLETS 5, 6, 7 : Caisse, New, Inactifs
-# ----------------------------------------
-with tabs[4]:
-    st.markdown("#### 💻 Caisse.ma (🖱️ Cliquable)")
-    if not df_caisse.empty:
-        df_c_comp = merge_ext(df_caisse, resto_comp)
-        if not df_c_comp.empty: 
-            disp_caisse = df_c_comp[['Restaurant ID', 'Restaurant Name', 'Requested', 'GMV', 'wow GMV %', 'Success Rate']].copy()
-            ev_c = st.dataframe(disp_caisse.style.format({'GMV': '{:,.0f}', 'wow GMV %': '{:+.1%}', 'Success Rate': '{:.1%}'}), column_config={"Restaurant ID": None}, hide_index=True, use_container_width=True, on_select="rerun", selection_mode="single-row", key="caisse_table_select")
-            if ev_c.selection.rows:
-                st.session_state.popup_entity_type = 'Restaurant'
-                st.session_state.popup_entity_id = disp_caisse.iloc[ev_c.selection.rows[0]]['Restaurant ID']
-                st.session_state.popup_entity_name = disp_caisse.iloc[ev_c.selection.rows[0]]['Restaurant Name']
-
-with tabs[5]:
-    st.markdown("#### ✨ New Restaurants (🖱️ Cliquable)")
-    if not df_new.empty:
-        df_n_comp = merge_ext(df_new, resto_comp)
-        if not df_n_comp.empty: 
-            disp_new = df_n_comp[['Restaurant ID', 'Restaurant Name', 'Requested', 'GMV', 'Success Rate']].copy()
-            ev_n = st.dataframe(disp_new.style.format({'GMV': '{:,.0f}', 'Success Rate': '{:.1%}'}), column_config={"Restaurant ID": None}, hide_index=True, use_container_width=True, on_select="rerun", selection_mode="single-row", key="new_table_select")
-            if ev_n.selection.rows:
-                st.session_state.popup_entity_type = 'Restaurant'
-                st.session_state.popup_entity_id = disp_new.iloc[ev_n.selection.rows[0]]['Restaurant ID']
-                st.session_state.popup_entity_name = disp_new.iloc[ev_n.selection.rows[0]]['Restaurant Name']
-
-with tabs[6]:
-    st.markdown("#### 👻 Inactifs")
-    j_inactifs = st.radio("Signaler les inactifs depuis :", [3, 7, 15, 30], format_func=lambda x: f"{x} Jours", horizontal=True, key="inactifs_jours_radio")
-    max_d = df_merged['order day'].max()
-    restos_actifs = df_merged[df_merged['order day'] >= max_d - timedelta(days=j_inactifs)]['Restaurant ID'].unique()
-    restos_inactifs = liste_attendue[~liste_attendue['Restaurant ID'].isin(restos_actifs)]
-    st.error(f"⚠️ {len(restos_inactifs)} restaurants inactifs depuis {j_inactifs} jours")
-    st.dataframe(restos_inactifs[['Restaurant Name']], hide_index=True)
-
-# ----------------------------------------
-# ONGLETS 8 & 9 : Héros & Catégories (MAINTENANT CLIQUABLES)
-# ----------------------------------------
-with tabs[7]:
-    st.markdown("#### 🏆 Produits Héros (🖱️ Cliquable)")
-    if 'Food Item' in df_current.columns:
-        df_items = df_current.assign(Item=df_current['Food Item'].astype(str).str.replace(r'\[|\]|\{\d+\}', '', regex=True).str.split(',')).explode('Item')
-        df_items['Item'] = df_items['Item'].str.strip()
-        df_items = df_items[(df_items['Item'] != 'nan') & (df_items['Item'] != '')]
-        top_items = df_items['Item'].value_counts().reset_index()
-        top_items.columns = ['Produit', 'Nombre']
-        
-        c_p1, c_p2 = st.columns([1, 2])
-        with c_p1: 
-            ev_p = st.dataframe(top_items.head(15), hide_index=True, on_select="rerun", selection_mode="single-row", key="heros_table_select")
-            if ev_p.selection.rows:
-                st.session_state.popup_entity_type = 'Item'
-                st.session_state.popup_entity_id = top_items.iloc[ev_p.selection.rows[0]]['Produit']
-                st.session_state.popup_entity_name = top_items.iloc[ev_p.selection.rows[0]]['Produit']
-        with c_p2: st.plotly_chart(px.bar(top_items.head(10), x='Nombre', y='Produit', orientation='h').update_layout(yaxis={'categoryorder':'total ascending'}), use_container_width=True, key="hero_bar_chart")
-
-with tabs[8]:
-    st.markdown("#### 🍕 Catégories Food (🖱️ Cliquable)")
-    if 'Food Category' in df_current.columns:
-        df_current_cat = df_current[df_current['Food Category'].astype(str) != 'nan'].copy()
-        df_current_cat['Food Category'] = df_current_cat['Food Category'].astype(str).str.replace(r'\[|\]|/', '', regex=True).str.strip()
-        df_cat = compute_metrics(df_current_cat, ['Food Category'])
-        df_cat['Success Rate'] = (df_cat['Delivered'] / df_cat['Requested'].replace(0, np.nan)).fillna(0)
-        df_cat['AOV'] = (df_cat['GMV'] / df_cat['Delivered'].replace(0, np.nan)).fillna(0)
-        
-        df_cat_disp = df_cat.sort_values('Requested', ascending=False)
-        disp_cat = df_cat_disp[['Food Category', 'Requested', 'Delivered', 'Success Rate', 'GMV', 'AOV']].copy()
-        
-        ev_cat = st.dataframe(disp_cat.style.format({'Success Rate': '{:.1%}', 'GMV': '{:,.0f}', 'AOV': '{:,.0f}'}), hide_index=True, use_container_width=True, on_select="rerun", selection_mode="single-row", key="cat_table_select")
-        if ev_cat.selection.rows:
-            st.session_state.popup_entity_type = 'Category'
-            st.session_state.popup_entity_id = disp_cat.iloc[ev_cat.selection.rows[0]]['Food Category']
-            st.session_state.popup_entity_name = disp_cat.iloc[ev_cat.selection.rows[0]]['Food Category']
-
-
-# ==========================================
-# GESTION SÉCURISÉE DU POPUP (FIN DU FICHIER)
-# ==========================================
-if st.session_state.get("popup_entity_id") is not None:
-    popup_360(st.session_state.popup_entity_type, st.session_state.popup_entity_id, st.session_state.popup_entity_name)
-    # On vide la mémoire pour éviter que le popup s'ouvre en boucle et fasse l'erreur "Duplicate Element ID"
-    st.session_state.popup_entity_id = None
-    st.session_state.popup_entity_type = None
-    st.session_state.popup_entity_name = None
-
-# ----------------------------------------
-# ONGLET 2 : OVERVIEW PIPELINE
-# ----------------------------------------
-with tabs[1]:
-    st.markdown("#### 📋 Base Détaillée (🖱️ Cliquez sur une ligne pour ouvrir le CRM)")
-    resto_comp = compare_wow(df_current_full, df_prev_full, ['Restaurant ID', 'Restaurant Name', 'Area'])
-    
-    cols = ['Restaurant ID', 'Tier', 'Area', 'Restaurant Name', 'Requested', 'Delivered', 'Success Rate', 'Taux Acceptation', 'wow T.A', 'GMV', 'wow GMV %']
-    df_disp = resto_comp[cols].copy()
-    for c in ['Success Rate', 'Taux Acceptation', 'wow T.A', 'wow GMV %']: df_disp[c] = df_disp[c].apply(lambda x: f"{x:+.1%}")
-    for c in ['GMV']: df_disp[c] = df_disp[c].apply(lambda x: f"{x:,.0f}")
-
-    event = st.dataframe(df_disp, column_config={"Restaurant ID": None}, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row", key="overview_table_select")
-    if event.selection.rows:
-        st.session_state.popup_resto_id = df_disp.iloc[event.selection.rows[0]]['Restaurant ID']
-        st.session_state.popup_resto_name = df_disp.iloc[event.selection.rows[0]]['Restaurant Name']
 
     anomalies = resto_comp[(resto_comp['Tier'] == 'Tier A') & (resto_comp['wow delivered %'] < -0.15)]
     if not anomalies.empty:
@@ -674,24 +534,28 @@ with tabs[4]:
     if not df_caisse.empty:
         df_c_comp = merge_ext(df_caisse, resto_comp)
         if not df_c_comp.empty: 
-            ev_c = st.dataframe(df_c_comp[['Restaurant ID', 'Restaurant Name', 'Requested', 'GMV', 'wow GMV %', 'Success Rate']].style.format({'GMV': '{:,.0f}', 'wow GMV %': '{:+.1%}', 'Success Rate': '{:.1%}'}), column_config={"Restaurant ID": None}, hide_index=True, on_select="rerun", selection_mode="single-row")
-            if ev_c.selection.rows: 
-                st.session_state.popup_resto_id = df_c_comp.iloc[ev_c.selection.rows[0]]['Restaurant ID']
-                st.session_state.popup_resto_name = df_c_comp.iloc[ev_c.selection.rows[0]]['Restaurant Name']
+            disp_caisse = df_c_comp[['Restaurant ID', 'Restaurant Name', 'Requested', 'GMV', 'wow GMV %', 'Success Rate']].copy()
+            ev_c = st.dataframe(disp_caisse.style.format({'GMV': '{:,.0f}', 'wow GMV %': '{:+.1%}', 'Success Rate': '{:.1%}'}), column_config={"Restaurant ID": None}, hide_index=True, use_container_width=True, on_select="rerun", selection_mode="single-row", key="caisse_table_select")
+            if ev_c.selection.rows:
+                st.session_state.popup_entity_type = 'Restaurant'
+                st.session_state.popup_entity_id = disp_caisse.iloc[ev_c.selection.rows[0]]['Restaurant ID']
+                st.session_state.popup_entity_name = disp_caisse.iloc[ev_c.selection.rows[0]]['Restaurant Name']
 
 with tabs[5]:
     st.markdown("#### ✨ New Restaurants (🖱️ Cliquable)")
     if not df_new.empty:
         df_n_comp = merge_ext(df_new, resto_comp)
         if not df_n_comp.empty: 
-            ev_n = st.dataframe(df_n_comp[['Restaurant ID', 'Restaurant Name', 'Requested', 'GMV', 'Success Rate']].style.format({'GMV': '{:,.0f}', 'Success Rate': '{:.1%}'}), column_config={"Restaurant ID": None}, hide_index=True, on_select="rerun", selection_mode="single-row")
-            if ev_n.selection.rows: 
-                st.session_state.popup_resto_id = df_n_comp.iloc[ev_n.selection.rows[0]]['Restaurant ID']
-                st.session_state.popup_resto_name = df_n_comp.iloc[ev_n.selection.rows[0]]['Restaurant Name']
+            disp_new = df_n_comp[['Restaurant ID', 'Restaurant Name', 'Requested', 'GMV', 'Success Rate']].copy()
+            ev_n = st.dataframe(disp_new.style.format({'GMV': '{:,.0f}', 'Success Rate': '{:.1%}'}), column_config={"Restaurant ID": None}, hide_index=True, use_container_width=True, on_select="rerun", selection_mode="single-row", key="new_table_select")
+            if ev_n.selection.rows:
+                st.session_state.popup_entity_type = 'Restaurant'
+                st.session_state.popup_entity_id = disp_new.iloc[ev_n.selection.rows[0]]['Restaurant ID']
+                st.session_state.popup_entity_name = disp_new.iloc[ev_n.selection.rows[0]]['Restaurant Name']
 
 with tabs[6]:
     st.markdown("#### 👻 Inactifs")
-    j_inactifs = st.radio("Signaler les inactifs depuis :", [3, 7, 15, 30], format_func=lambda x: f"{x} Jours", horizontal=True)
+    j_inactifs = st.radio("Signaler les inactifs depuis :", [3, 7, 15, 30], format_func=lambda x: f"{x} Jours", horizontal=True, key="inactifs_jours_radio")
     max_d = df_merged['order day'].max()
     restos_actifs = df_merged[df_merged['order day'] >= max_d - timedelta(days=j_inactifs)]['Restaurant ID'].unique()
     restos_inactifs = liste_attendue[~liste_attendue['Restaurant ID'].isin(restos_actifs)]
@@ -699,7 +563,7 @@ with tabs[6]:
     st.dataframe(restos_inactifs[['Restaurant Name']], hide_index=True)
 
 # ----------------------------------------
-# ONGLETS 8 & 9 : Héros & Catégories (Nettoyé & Cliquable)
+# ONGLETS 8 & 9 : Héros & Catégories (CLIQUABLES)
 # ----------------------------------------
 with tabs[7]:
     st.markdown("#### 🏆 Produits Héros (🖱️ Cliquable)")
@@ -760,7 +624,8 @@ with tabs[8]:
             hide_index=True, 
             use_container_width=True, 
             on_select="rerun", 
-            selection_mode="single-row"
+            selection_mode="single-row",
+            key="cat_table_select"
         )
         if ev_cat.selection.rows:
             st.session_state.popup_entity_type = 'Category'
@@ -768,10 +633,10 @@ with tabs[8]:
             st.session_state.popup_entity_name = disp_cat.iloc[ev_cat.selection.rows[0]]['Food Category']
 
 # ==========================================
-# GESTION SÉCURISÉE DU POPUP (Fin du fichier)
+# GESTION SÉCURISÉE DU POPUP (FIN DU FICHIER)
 # ==========================================
-if st.session_state.get("popup_resto_id") is not None:
-    popup_restaurant(st.session_state.popup_resto_id, st.session_state.popup_resto_name)
-    # On efface la mémoire pour éviter que le popup ne s'ouvre en boucle
-    st.session_state.popup_resto_id = None
-    st.session_state.popup_resto_name = None
+if st.session_state.get("popup_entity_id") is not None and st.session_state.get("popup_entity_type") is not None:
+    popup_360(st.session_state.popup_entity_type, st.session_state.popup_entity_id, st.session_state.popup_entity_name)
+    st.session_state.popup_entity_id = None
+    st.session_state.popup_entity_type = None
+    st.session_state.popup_entity_name = None
