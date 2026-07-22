@@ -29,6 +29,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 if "auth" not in st.session_state: st.session_state.auth = False
+if "popup_resto_id" not in st.session_state: st.session_state.popup_resto_id = None
+if "popup_resto_name" not in st.session_state: st.session_state.popup_resto_name = None
 
 if not st.session_state.auth:
     st.title("🔒 Accès Sécurisé - Control Tower")
@@ -372,7 +374,8 @@ with tabs[1]:
 
     event = st.dataframe(df_disp, column_config={"Restaurant ID": None}, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
     if event.selection.rows:
-        popup_restaurant(df_disp.iloc[event.selection.rows[0]]['Restaurant ID'], df_disp.iloc[event.selection.rows[0]]['Restaurant Name'])
+        st.session_state.popup_resto_id = df_disp.iloc[event.selection.rows[0]]['Restaurant ID']
+        st.session_state.popup_resto_name = df_disp.iloc[event.selection.rows[0]]['Restaurant Name']
 
     anomalies = resto_comp[(resto_comp['Tier'] == 'Tier A') & (resto_comp['wow delivered %'] < -0.15)]
     if not anomalies.empty:
