@@ -102,26 +102,39 @@ def clean_id_series(s):
         return s
     return s.astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
 
-# --- CHARGEMENT DU SHEET CENTRAL RST_list ---
+# --- CHARGEMENT ROBUSTE DU REFERENTIEL RST_list (GSHEETS + SECOURS CSV) ---
 @st.cache_data(ttl=600)
-def load_rst_list_gsheets():
+def load_rst_list_master():
+    df_rst = pd.DataFrame()
+    # 1. Essai via Google Sheets
     try:
         sheet_rst = gc.open("RST_list")
         records = sheet_rst.sheet1.get_all_records()
         df_rst = pd.DataFrame(records)
-        if not df_rst.empty and 'Restaurant ID' in df_rst.columns:
-            df_rst['Restaurant ID'] = clean_id_series(df_rst['Restaurant ID'])
-            if 'Restaurant Name' not in df_rst.columns and 'restaurant name' in df_rst.columns:
-                df_rst.rename(columns={'restaurant name': 'Restaurant Name'}, inplace=True)
-            if 'Main City' in df_rst.columns:
-                df_rst['Main City'] = df_rst['Main City'].astype(str).str.strip()
-            if 'Sub City' in df_rst.columns:
-                df_rst['Sub City'] = df_rst['Sub City'].astype(str).str.strip()
-        return df_rst
     except Exception:
-        return pd.DataFrame()
+        df_rst = pd.DataFrame()
 
-df_rst_master = load_rst_list_gsheets()
+    # 2. Secours via le fichier CSV local si GSheets n'est pas accessible
+    if df_rst.empty:
+        try:
+            df_rst = pd.read_csv("restaurant-export-2026-05-15.csv", sep=";", dtype=str)
+        except Exception:
+            df_rst = pd.DataFrame()
+
+    # Nettoyage et formatage des colonnes
+    if not df_rst.empty:
+        if 'Restaurant ID' in df_rst.columns:
+            df_rst['Restaurant ID'] = clean_id_series(df_rst['Restaurant ID'])
+        if 'Restaurant Name' not in df_rst.columns and 'restaurant name' in df_rst.columns:
+            df_rst.rename(columns={'restaurant name': 'Restaurant Name'}, inplace=True)
+        if 'Main City' in df_rst.columns:
+            df_rst['Main City'] = df_rst['Main City'].astype(str).str.strip()
+        if 'Sub City' in df_rst.columns:
+            df_rst['Sub City'] = df_rst['Sub City'].astype(str).str.strip()
+
+    return df_rst
+
+df_rst_master = load_rst_list_master()
 
 @st.cache_data(show_spinner=False)
 def load_all_drive_csvs(files):
@@ -364,27 +377,35 @@ def popup_360(entity_type, entity_id, entity_name):
 
     st.markdown(f"### {'🏪' if entity_type == 'Restaurant' else '📊'} {entity_name}")
     
-    # --- CARTOUCHE D'INFO (RESTAURANT) ---
-    if entity_type == 'Restaurant' and not df_rst_master.empty:
-        rst_info = df_rst_master[df_rst_master['Restaurant ID'].astype(str).str.lower() == clean_entity_id]
-        if not rst_info.empty:
-            info = rst_info.iloc[0]
-            c_status = info.get('Status', 'N/A')
-            c_city = info.get('Main City', 'N/A')
-            c_sub = info.get('Sub City', 'N/A')
-            c_cuisine = str(info.get('Cuisine Type', 'Général')).replace(',', ', ')
-            c_comm = info.get('Commission %', '0')
-            c_type = info.get('Store Type', 'Restaurant')
+    # --- CARTOUCHE D'INFO VISIBLE & COMPLET (RESTAURANT) ---
+    if entity_type == 'Restaurant':
+        if not df_rst_master.empty:
+            rst_info = df_rst_master[df_rst_master['Restaurant ID'].astype(str).str.strip().str.lower() == clean_entity_id]
+            if not rst_info.empty:
+                info = rst_info.iloc[0]
+                c_status = str(info.get('Status', 'Inconnu'))
+                c_city = str(info.get('Main City', 'N/A'))
+                c_sub = str(info.get('Sub City', 'N/A'))
+                c_cuisine = str(info.get('Cuisine Type', 'Général')).replace(',', ', ')
+                if c_cuisine == 'nan' or not c_cuisine.strip(): c_cuisine = 'Général'
+                c_comm = str(info.get('Commission %', '0'))
+                c_type = str(info.get('Store Type', 'Restaurant'))
+                c_phone = str(info.get('Phone', 'N/A'))
+                c_email = str(info.get('Email', 'N/A'))
 
-            badge_color = "🟢" if c_status == "Active" else ("🟠" if c_status == "Inactive" else "🔴")
-            
-            st.info(
-                f"**Infos Partenaire :** {badge_color} **Statut:** {c_status} | "
-                f"🏙️ **Zone:** {c_city} ({c_sub}) | "
-                f"🍕 **Cuisine:** {c_cuisine} | "
-                f"💰 **Commission:** {c_comm}% | "
-                f"🏪 **Type:** {c_type}"
-            )
+                badge_color = "🟢" if c_status == "Active" else ("🟠" if c_status == "Inactive" else "🔴")
+                
+                st.info(
+                    f"### 📋 Fiche Partenaire ({c_status} {badge_color})\n"
+                    f"* 🏙️ **Ville & Zone :** {c_city} - {c_sub}\n"
+                    f"* 🍕 **Type de Cuisine :** {c_cuisine}\n"
+                    f"* 💰 **Commission Contractuelle :** {c_comm}%\n"
+                    f"* 🏪 **Format :** {c_type.capitalize()} | 📞 **Tél :** {c_phone} | ✉️ **Email :** {c_email}"
+                )
+            else:
+                st.warning("⚠️ Restaurant présent dans l'historique mais non référencé dans RST_list.")
+        else:
+            st.warning("⚠️ Référentiel RST_list introuvable.")
 
     # --- FILTRES TEMPORELS ---
     col_filtre, col_btn = st.columns([2, 1])
@@ -745,16 +766,31 @@ with tabs[0]:
             st.session_state.popup_entity_name = f"Zone : {val_area}"
 
 # ----------------------------------------
-# ONGLET 2 : OVERVIEW PIPELINE
+# ONGLET 2 : OVERVIEW PIPELINE (AVEC STATUT RST_list)
 # ----------------------------------------
 with tabs[1]:
     st.markdown("#### 📋 Base Détaillée (🖱️ Cliquez sur une ligne)")
     resto_comp = compare_wow(df_current_full, df_prev_full, ['Restaurant ID', 'Restaurant Name', 'Area'])
     
-    cols = ['Restaurant ID', 'Tier', 'Area', 'Restaurant Name', 'Requested', 'Delivered', 'Success Rate', 'Taux Acceptation', 'wow T.A', 'GMV', 'wow GMV %']
-    df_disp = resto_comp[cols].copy()
-    for c in ['Success Rate', 'Taux Acceptation', 'wow T.A', 'wow GMV %']: df_disp[c] = df_disp[c].apply(lambda x: f"{x:+.1%}")
-    for c in ['GMV']: df_disp[c] = df_disp[c].apply(lambda x: f"{x:,.0f}")
+    # Fusion avec RST_list pour afficher le Statut et la Commission directement dans le tableau
+    if not df_rst_master.empty and 'Status' in df_rst_master.columns:
+        resto_comp = pd.merge(
+            resto_comp, 
+            df_rst_master[['Restaurant ID', 'Status', 'Commission %']].drop_duplicates('Restaurant ID'),
+            on='Restaurant ID', 
+            how='left'
+        )
+        resto_comp['Status'] = resto_comp['Status'].fillna('N/A')
+        resto_comp['Commission %'] = resto_comp['Commission %'].fillna('0')
+
+    cols = ['Restaurant ID', 'Status', 'Tier', 'Area', 'Restaurant Name', 'Requested', 'Delivered', 'Success Rate', 'Taux Acceptation', 'wow T.A', 'GMV', 'wow GMV %']
+    cols_exist = [c for c in cols if c in resto_comp.columns]
+    df_disp = resto_comp[cols_exist].copy()
+    
+    for c in ['Success Rate', 'Taux Acceptation', 'wow T.A', 'wow GMV %']: 
+        if c in df_disp.columns: df_disp[c] = df_disp[c].apply(lambda x: f"{x:+.1%}" if pd.notnull(x) else "-")
+    for c in ['GMV']: 
+        if c in df_disp.columns: df_disp[c] = df_disp[c].apply(lambda x: f"{x:,.0f}" if pd.notnull(x) else "0")
 
     event = st.dataframe(df_disp, column_config={"Restaurant ID": None}, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row", key="overview_table_select")
     if is_new_selection("overview_table_select", event.selection.rows):
