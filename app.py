@@ -255,30 +255,40 @@ def popup_restaurant(resto_id, resto_name):
         p_df = pd.DataFrame(columns=df_r.columns)
         label_evo = "Global"
 
-    # --- MOTEUR DE CALCUL DES KPIs DU POPUP ---
+# --- MOTEUR DE CALCUL DES KPIs DU POPUP ---
     def calc_kpis(df):
         req = len(df)
-        df_deliv = df[df['status'] == 'Delivered']
+        df_deliv = df[df['status'] == 'Delivered'].copy()
         deliv = len(df_deliv)
-        gmv = df_deliv['item total'].sum() if 'item total' in df.columns else 0
+        gmv = df_deliv['item total'].sum() if 'item total' in df_deliv.columns else 0
         aov = (gmv / deliv) if deliv > 0 else 0
-        p_admin = df_deliv['coupon admin'].sum() if 'coupon admin' in df.columns else 0
-        p_resto = df_deliv['coupon restaurant'].sum() if 'coupon restaurant' in df.columns else 0
+        p_admin = df_deliv['coupon admin'].sum() if 'coupon admin' in df_deliv.columns else 0
+        p_resto = df_deliv['coupon restaurant'].sum() if 'coupon restaurant' in df_deliv.columns else 0
         sr = (deliv / req) if req > 0 else 0
         
-        # Temps (sécurisés au cas où la colonne est vide ou absente)
-        t_prep = df_deliv['preparation time'].mean() if 'preparation time' in df.columns else (df_deliv['prep time'].mean() if 'prep time' in df.columns else 0)
-        t_deliv = df_deliv['delivery time'].mean() if 'delivery time' in df.columns else 0
-        
+        # --- CORRECTION DES TEMPS ---
+        # 1. Temps de Livraison (Recherche de 'delivery time(M)')
+        t_deliv = 0
+        if 'delivery time(M)' in df_deliv.columns:
+            t_deliv = df_deliv['delivery time(M)'].mean()
+        elif 'delivery time' in df_deliv.columns:
+            t_deliv = df_deliv['delivery time'].mean()
+            
+        # 2. Temps de Préparation (Calculé dynamiquement)
+        t_prep = 0
+        if 'preparation time' in df_deliv.columns:
+            t_prep = df_deliv['preparation time'].mean()
+        elif 'Ready by Restaurant' in df_deliv.columns and 'Accepted at' in df_deliv.columns:
+            # On calcule la différence entre l'heure où le resto a accepté et l'heure où le plat était prêt
+            try:
+                accepted = pd.to_datetime(df_deliv['Accepted at'].astype(str).str.replace(' /', ''), format='mixed', errors='coerce')
+                ready = pd.to_datetime(df_deliv['Ready by Restaurant'].astype(str).str.replace(' /', ''), format='mixed', errors='coerce')
+                prep_time_mins = (ready - accepted).dt.total_seconds() / 60
+                t_prep = prep_time_mins.mean()
+            except:
+                t_prep = 0
+                
         return req, deliv, gmv, aov, p_admin, p_resto, sr, t_prep, t_deliv
-
-    c_req, c_del, c_gmv, c_aov, c_pa, c_pr, c_sr, c_prep, c_dt = calc_kpis(c_df)
-    p_req, p_del, p_gmv, p_aov, p_pa, p_pr, p_sr, p_prep, p_dt = calc_kpis(p_df)
-
-    def format_evo(curr, prev):
-        if prev == 0 and curr > 0: return "+100%"
-        if prev == 0 and curr == 0: return "-"
-        return f"{(curr / prev) - 1:+.1%}"
 
     # --- BOUTON DE GÉNÉRATION DU RAPPORT PARTENAIRE ---
     with col_btn:
