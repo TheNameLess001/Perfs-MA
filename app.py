@@ -78,7 +78,8 @@ vue_globale = st.radio("Portée de l'analyse :", ["🇲🇦 Global Maroc", "🎯
 col_am, col_upload = st.columns([1, 2])
 with col_am:
     if vue_globale == "🎯 Par Account Manager (Pipeline)":
-        am_choisi = st.selectbox("Sélectionnez la Pipeline", ["Houda", "Yassine", "Sara", "Amine"], label_visibility="collapsed")
+        # MISE À JOUR DES NOMS ICI
+        am_choisi = st.selectbox("Sélectionnez la Pipeline", ["Houda", "Chaima", "Najwa", "Imane"], label_visibility="collapsed")
     else:
         am_choisi = "Global"
 
@@ -224,8 +225,6 @@ tabs = st.tabs([
     "🏆 8. Produits Héros",
     "🍕 9. Catégories Food"
 ])
-
-# --- Les 9 onglets restent strictement identiques à la Base 1 ---
 
 with tabs[0]:
     st.markdown("#### 🌍 Analyse Macro des Performances")
