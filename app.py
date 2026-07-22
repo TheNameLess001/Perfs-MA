@@ -340,11 +340,19 @@ def popup_360(entity_type, entity_id, entity_name):
     with b8: st.markdown(f"<div class='purple-box'><h3>Temps Livraison</h3><h2>{v_del}</h2><p>{label_evo}: {format_evo(c_dt, p_dt) if v_del != 'N/A' else '-'}</p></div>", unsafe_allow_html=True)
     with b9: st.markdown(f"<div class='purple-box'><h3>Analyse Active</h3><h2>{label_evo}</h2><p>Période sélectionnée</p></div>", unsafe_allow_html=True)
 
-    if entity_type == 'Week':
-        st.markdown("#### 📈 Tops & Flops de la Semaine (Requests)")
+    if entity_type in ['Week', 'City', 'Area']:
+        st.markdown(f"#### 📈 Tops & Flops ({entity_name}) - Volume de Commandes")
         resto_curr = compute_metrics(c_df, ['Restaurant ID', 'Restaurant Name'])
         resto_prev = compute_metrics(p_df, ['Restaurant ID', 'Restaurant Name'])
         comp_w = compare_wow(resto_curr, resto_prev, ['Restaurant ID', 'Restaurant Name'])
+        
+        c_t, c_f = st.columns(2)
+        with c_t:
+            st.success("🏆 Top 10 Accélérations")
+            st.dataframe(comp_w.sort_values('wow Req', ascending=False).head(10)[['Restaurant Name', 'wow Req', 'wow Req %']].style.format({'wow Req': '{:+,.0f}', 'wow Req %': '{:+.1%}'}), hide_index=True)
+        with c_f:
+            st.error("📉 Flop 10 Chutes")
+            st.dataframe(comp_w.sort_values('wow Req', ascending=True).head(10)[['Restaurant Name', 'wow Req', 'wow Req %']].style.format({'wow Req': '{:+,.0f}', 'wow Req %': '{:+.1%}'}), hide_index=True)
         
         c_t, c_f = st.columns(2)
         with c_t:
