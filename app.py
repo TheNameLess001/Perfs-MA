@@ -588,10 +588,6 @@ if st.session_state.get("popup_entity_id") is not None:
     st.session_state.popup_entity_id = None
     st.session_state.popup_entity_type = None
     st.session_state.popup_entity_name = None
-# ==========================================
-# 6. ONGLETS ET AFFICHAGES VISUELS
-# ==========================================
-tabs = st.tabs(["🌍 1. Macro", "📈 2. Overview", "❌ 3. Annul.", "🤖 4. Auto", "💻 5. Caisse", "✨ 6. New", "👻 7. Inactifs", "🏆 8. Héros", "🍕 9. Catégories"])
 
 # ----------------------------------------
 # ONGLET 2 : OVERVIEW PIPELINE
