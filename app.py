@@ -425,7 +425,7 @@ tabs = st.tabs(["🌍 1. Macro", "📈 2. Overview", "❌ 3. Annulations", "🤖
 # ----------------------------------------
 with tabs[0]:
     st.markdown("#### 🌍 Analyse Macro des Performances (🖱️ Cliquez sur une semaine)")
-    vue_temporelle = st.radio("Sélectionnez la vue globale :", ["📊 Par Semaine", "📅 Par Jour"], horizontal=True)
+    vue_temporelle = st.radio("Sélectionnez la vue globale :", ["📊 Par Semaine", "📅 Par Jour"], horizontal=True, key="macro_vue_temporelle")
     df_macro_base = df_merged.copy()
     df_macro_base['Période'] = df_macro_base['order day'].dt.strftime('%Y-%m-%d') if vue_temporelle == "📅 Par Jour" else df_macro_base['Week']
 
@@ -532,7 +532,7 @@ with tabs[5]:
 
 with tabs[6]:
     st.markdown("#### 👻 Inactifs")
-    j_inactifs = st.radio("Signaler les inactifs depuis :", [3, 7, 15, 30], format_func=lambda x: f"{x} Jours", horizontal=True)
+    j_inactifs = st.radio("Signaler les inactifs depuis :", [3, 7, 15, 30], format_func=lambda x: f"{x} Jours", horizontal=True, key="inactifs_jours_radio")
     max_d = df_merged['order day'].max()
     restos_actifs = df_merged[df_merged['order day'] >= max_d - timedelta(days=j_inactifs)]['Restaurant ID'].unique()
     restos_inactifs = liste_attendue[~liste_attendue['Restaurant ID'].isin(restos_actifs)]
