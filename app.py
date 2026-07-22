@@ -444,7 +444,7 @@ with tabs[0]:
     for col in ['GMV', 'CA', 'AOV']: df_macro_display[col] = df_macro_display[col].apply(lambda x: f"{x:,.2f}")
 
     disp_macro = df_macro_display[['Période', 'Reçu', 'Livré', 'GMV', 'CA', 'AOV', 'V. Reçu', 'V. Livré', 'V. GMV', 'V. CA', 'V. AOV']]
-    ev_macro = st.dataframe(disp_macro, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
+    ev_macro = st.dataframe(disp_macro, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row", key="macro_table_select")
     
     if ev_macro.selection.rows:
         idx = ev_macro.selection.rows[0]
@@ -512,7 +512,7 @@ with tabs[4]:
         df_c_comp = merge_ext(df_caisse, resto_comp)
         if not df_c_comp.empty: 
             disp_caisse = df_c_comp[['Restaurant ID', 'Restaurant Name', 'Requested', 'GMV', 'wow GMV %', 'Success Rate']].copy()
-            ev_c = st.dataframe(disp_caisse.style.format({'GMV': '{:,.0f}', 'wow GMV %': '{:+.1%}', 'Success Rate': '{:.1%}'}), column_config={"Restaurant ID": None}, hide_index=True, on_select="rerun", selection_mode="single-row")
+            ev_c = st.dataframe(disp_caisse.style.format({'GMV': '{:,.0f}', 'wow GMV %': '{:+.1%}', 'Success Rate': '{:.1%}'}), column_config={"Restaurant ID": None}, hide_index=True, use_container_width=True, on_select="rerun", selection_mode="single-row", key="caisse_table_select")
             if ev_c.selection.rows:
                 st.session_state.popup_entity_type = 'Restaurant'
                 st.session_state.popup_entity_id = disp_caisse.iloc[ev_c.selection.rows[0]]['Restaurant ID']
@@ -524,7 +524,7 @@ with tabs[5]:
         df_n_comp = merge_ext(df_new, resto_comp)
         if not df_n_comp.empty: 
             disp_new = df_n_comp[['Restaurant ID', 'Restaurant Name', 'Requested', 'GMV', 'Success Rate']].copy()
-            ev_n = st.dataframe(disp_new.style.format({'GMV': '{:,.0f}', 'Success Rate': '{:.1%}'}), column_config={"Restaurant ID": None}, hide_index=True, on_select="rerun", selection_mode="single-row")
+            ev_n = st.dataframe(disp_new.style.format({'GMV': '{:,.0f}', 'Success Rate': '{:.1%}'}), column_config={"Restaurant ID": None}, hide_index=True, use_container_width=True, on_select="rerun", selection_mode="single-row", key="new_table_select")
             if ev_n.selection.rows:
                 st.session_state.popup_entity_type = 'Restaurant'
                 st.session_state.popup_entity_id = disp_new.iloc[ev_n.selection.rows[0]]['Restaurant ID']
@@ -553,7 +553,7 @@ with tabs[7]:
         
         c_p1, c_p2 = st.columns([1, 2])
         with c_p1: 
-            ev_p = st.dataframe(top_items.head(15), hide_index=True, on_select="rerun", selection_mode="single-row")
+            ev_p = st.dataframe(top_items.head(15), hide_index=True, on_select="rerun", selection_mode="single-row", key="heros_table_select")
             if ev_p.selection.rows:
                 st.session_state.popup_entity_type = 'Item'
                 st.session_state.popup_entity_id = top_items.iloc[ev_p.selection.rows[0]]['Produit']
@@ -572,7 +572,7 @@ with tabs[8]:
         df_cat_disp = df_cat.sort_values('Requested', ascending=False)
         disp_cat = df_cat_disp[['Food Category', 'Requested', 'Delivered', 'Success Rate', 'GMV', 'AOV']].copy()
         
-        ev_cat = st.dataframe(disp_cat.style.format({'Success Rate': '{:.1%}', 'GMV': '{:,.0f}', 'AOV': '{:,.0f}'}), hide_index=True, use_container_width=True, on_select="rerun", selection_mode="single-row")
+        ev_cat = st.dataframe(disp_cat.style.format({'Success Rate': '{:.1%}', 'GMV': '{:,.0f}', 'AOV': '{:,.0f}'}), hide_index=True, use_container_width=True, on_select="rerun", selection_mode="single-row", key="cat_table_select")
         if ev_cat.selection.rows:
             st.session_state.popup_entity_type = 'Category'
             st.session_state.popup_entity_id = disp_cat.iloc[ev_cat.selection.rows[0]]['Food Category']
@@ -712,7 +712,7 @@ with tabs[7]:
         
         c_p1, c_p2 = st.columns([1, 2])
         with c_p1: 
-            ev_p = st.dataframe(top_items.head(15), hide_index=True, on_select="rerun", selection_mode="single-row")
+            ev_p = st.dataframe(top_items.head(15), hide_index=True, on_select="rerun", selection_mode="single-row", key="heros_table_select")
             if ev_p.selection.rows:
                 st.session_state.popup_entity_type = 'Item'
                 st.session_state.popup_entity_id = top_items.iloc[ev_p.selection.rows[0]]['Produit']
