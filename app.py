@@ -29,8 +29,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 if "auth" not in st.session_state: st.session_state.auth = False
-if "popup_resto_id" not in st.session_state: st.session_state.popup_resto_id = None
-if "popup_resto_name" not in st.session_state: st.session_state.popup_resto_name = None
+if "popup_entity_id" not in st.session_state: st.session_state.popup_entity_id = None
+if "popup_entity_name" not in st.session_state: st.session_state.popup_entity_name = None
+if "popup_entity_type" not in st.session_state: st.session_state.popup_entity_type = None
 
 if not st.session_state.auth:
     st.title("🔒 Accès Sécurisé - Control Tower")
@@ -222,37 +223,57 @@ df_current_full = get_metrics_with_zeroes(df_current, liste_base_overview)
 df_prev_full = get_metrics_with_zeroes(df_prev, liste_base_overview)
 
 # ==========================================
-# 5. POPUP 360° (CRM RESTAURANT DYNAMIQUE)
+# 5. POPUP 360° UNIVERSEL (RESTO, WEEK, FOOD)
 # ==========================================
-@st.dialog("🔍 Vue 360° du Restaurant", width="large")
-def popup_restaurant(resto_id, resto_name):
-    df_r = df_merged[df_merged['Restaurant ID'].astype(str) == str(resto_id)].sort_values('order day')
-    
-    st.markdown(f"### 🏪 {resto_name}")
-    
-    # --- LIGNE D'EN-TÊTE : FILTRE ET BOUTON REPORT ---
-    col_filtre, col_btn = st.columns([2, 1])
-    with col_filtre:
-        choix_periode = st.radio("Filtre d'analyse du popup :", ["WoW (Semaine Active)", "MoM (30 Derniers Jours)", "Historique Complet"], horizontal=True)
-    
-    # Paramétrage des périodes de comparaison
-    max_d = df_r['order day'].max()
-    if pd.isna(max_d): max_d = datetime.now()
-    
-    if choix_periode == "WoW (Semaine Active)":
-        c_df = df_r[df_r['Week'] == semaine_selectionnee]
-        p_df = df_r[df_r['Week'] == semaine_precedente] if semaine_precedente else pd.DataFrame(columns=df_r.columns)
-        label_evo = "WoW"
-    elif choix_periode == "MoM (30 Derniers Jours)":
-        c_df = df_r[df_r['order day'] >= max_d - timedelta(days=30)]
-        p_df = df_r[(df_r['order day'] >= max_d - timedelta(days=60)) & (df_r['order day'] < max_d - timedelta(days=30))]
-        label_evo = "MoM"
-    else:
-        c_df = df_r
-        p_df = pd.DataFrame(columns=df_r.columns)
-        label_evo = "Global"
+@st.dialog("🔍 Vue 360° Détaillée", width="large")
+def popup_360(entity_type, entity_id, entity_name):
+    # --- 1. FILTRAGE SELON LE TYPE D'ENTITÉ ---
+    if entity_type == 'Restaurant':
+        df_r = df_merged[df_merged['Restaurant ID'].astype(str) == str(entity_id)].sort_values('order day')
+        note_id = str(entity_id)
+    elif entity_type == 'Category':
+        df_r = df_merged[df_merged['Food Category'].astype(str).str.replace(r'\[|\]|/', '', regex=True).str.strip() == str(entity_id)].sort_values('order day')
+        note_id = f"Cat_{entity_id}"
+    elif entity_type == 'Item':
+        df_r = df_merged[df_merged['Food Item'].astype(str).str.contains(str(entity_id), regex=False, na=False)].sort_values('order day')
+        note_id = f"Item_{entity_id}"
+    elif entity_type == 'Week':
+        df_r = df_merged.sort_values('order day') # Pour une semaine, on prend tout pour comparer
+        note_id = f"Week_{entity_id}"
 
-# --- MOTEUR DE CALCUL DES KPIs DU POPUP ---
+    st.markdown(f"### {'🏪' if entity_type == 'Restaurant' else '📊'} {entity_name}")
+    
+    # --- 2. FILTRES TEMPORELS ---
+    col_filtre, col_btn = st.columns([2, 1])
+    if entity_type == 'Week':
+        with col_filtre: st.info(f"Analyse figée sur la {entity_name}")
+        c_df = df_r[df_r['Week'] == entity_id]
+        weeks_list = sorted(df_r['Week'].unique(), reverse=True)
+        try: p_week = weeks_list[weeks_list.index(entity_id) + 1]
+        except: p_week = None
+        p_df = df_r[df_r['Week'] == p_week] if p_week else pd.DataFrame(columns=df_r.columns)
+        label_evo = "WoW"
+        choix_periode = entity_name
+    else:
+        with col_filtre:
+            choix_periode = st.radio("Filtre d'analyse :", ["WoW (Semaine Active)", "MoM (30 Derniers Jours)", "Historique Complet"], horizontal=True, key=f"radio_pop_{note_id}")
+        max_d = df_r['order day'].max()
+        if pd.isna(max_d): max_d = datetime.now()
+        
+        if choix_periode == "WoW (Semaine Active)":
+            c_df = df_r[df_r['Week'] == semaine_selectionnee]
+            p_df = df_r[df_r['Week'] == semaine_precedente] if semaine_precedente else pd.DataFrame(columns=df_r.columns)
+            label_evo = "WoW"
+        elif choix_periode == "MoM (30 Derniers Jours)":
+            c_df = df_r[df_r['order day'] >= max_d - timedelta(days=30)]
+            p_df = df_r[(df_r['order day'] >= max_d - timedelta(days=60)) & (df_r['order day'] < max_d - timedelta(days=30))]
+            label_evo = "MoM"
+        else:
+            c_df = df_r
+            p_df = pd.DataFrame(columns=df_r.columns)
+            label_evo = "Global"
+
+    # --- 3. MOTEUR DE CALCULS DES KPIs ---
     def calc_kpis(df):
         req = len(df)
         df_deliv = df[df['status'] == 'Delivered'].copy()
@@ -263,28 +284,20 @@ def popup_restaurant(resto_id, resto_name):
         p_resto = df_deliv['coupon restaurant'].sum() if 'coupon restaurant' in df_deliv.columns else 0
         sr = (deliv / req) if req > 0 else 0
         
-        # Temps (sécurisés au cas où la colonne est vide ou absente)
         t_deliv = 0
-        if 'delivery time(M)' in df_deliv.columns:
-            t_deliv = df_deliv['delivery time(M)'].mean()
-        elif 'delivery time' in df_deliv.columns:
-            t_deliv = df_deliv['delivery time'].mean()
+        if 'delivery time(M)' in df_deliv.columns: t_deliv = df_deliv['delivery time(M)'].mean()
+        elif 'delivery time' in df_deliv.columns: t_deliv = df_deliv['delivery time'].mean()
             
         t_prep = 0
-        if 'preparation time' in df_deliv.columns:
-            t_prep = df_deliv['preparation time'].mean()
+        if 'preparation time' in df_deliv.columns: t_prep = df_deliv['preparation time'].mean()
         elif 'Ready by Restaurant' in df_deliv.columns and 'Accepted at' in df_deliv.columns:
             try:
                 accepted = pd.to_datetime(df_deliv['Accepted at'].astype(str).str.replace(' /', ''), format='mixed', errors='coerce')
                 ready = pd.to_datetime(df_deliv['Ready by Restaurant'].astype(str).str.replace(' /', ''), format='mixed', errors='coerce')
-                prep_time_mins = (ready - accepted).dt.total_seconds() / 60
-                t_prep = prep_time_mins.mean()
-            except:
-                t_prep = 0
-                
+                t_prep = ((ready - accepted).dt.total_seconds() / 60).mean()
+            except: t_prep = 0
         return req, deliv, gmv, aov, p_admin, p_resto, sr, t_prep, t_deliv
 
-    # ---> LES LIGNES QUI AVAIENT DISPARU SONT ICI <---
     c_req, c_del, c_gmv, c_aov, c_pa, c_pr, c_sr, c_prep, c_dt = calc_kpis(c_df)
     p_req, p_del, p_gmv, p_aov, p_pa, p_pr, p_sr, p_prep, p_dt = calc_kpis(p_df)
 
@@ -293,111 +306,283 @@ def popup_restaurant(resto_id, resto_name):
         if prev == 0 and curr == 0: return "-"
         return f"{(curr / prev) - 1:+.1%}"
 
-    # --- BOUTON DE GÉNÉRATION DU RAPPORT PARTENAIRE ---
+    # --- 4. BOUTON DE RAPPORT ---
     with col_btn:
-        report_text = f"📊 RAPPORT DE PERFORMANCES - YASSIR\n"
-        report_text += f"Partenaire : {resto_name}\n"
+        report_text = f"📊 RAPPORT DE PERFORMANCES - {entity_name}\n"
         report_text += f"Période : {choix_periode}\n"
         report_text += f"----------------------------------------\n"
-        report_text += f"📦 Commandes Reçues : {c_req} ({label_evo}: {format_evo(c_req, p_req)})\n"
-        report_text += f"✅ Commandes Livrées : {c_del} ({label_evo}: {format_evo(c_del, p_del)})\n"
+        report_text += f"📦 Reçues : {c_req} ({label_evo}: {format_evo(c_req, p_req)})\n"
+        report_text += f"✅ Livrées : {c_del} ({label_evo}: {format_evo(c_del, p_del)})\n"
         report_text += f"🎯 Success Rate : {c_sr:.1%} ({label_evo}: {format_evo(c_sr, p_sr)})\n"
-        report_text += f"💰 Chiffre d'affaires généré (GMV) : {c_gmv:,.0f} MAD ({label_evo}: {format_evo(c_gmv, p_gmv)})\n"
-        report_text += f"🛒 Panier Moyen (AOV) : {c_aov:,.0f} MAD ({label_evo}: {format_evo(c_aov, p_aov)})\n"
-        report_text += f"🎁 Promos investies (Yassir / Resto) : {c_pa:,.0f} MAD / {c_pr:,.0f} MAD\n"
-        if pd.notnull(c_dt) and c_dt > 0: report_text += f"⏱️ Temps de Livraison Moyen : {c_dt:.0f} min\n"
+        report_text += f"💰 GMV : {c_gmv:,.0f} MAD ({label_evo}: {format_evo(c_gmv, p_gmv)})\n"
+        report_text += f"🛒 Panier Moyen : {c_aov:,.0f} MAD ({label_evo}: {format_evo(c_aov, p_aov)})\n"
         report_text += f"----------------------------------------\n"
-        report_text += f"Généré automatiquement par Yassir Control Tower."
-        
-        st.download_button(
-            label="📥 Télécharger Présentation", 
-            data=report_text, 
-            file_name=f"Performances_{resto_name}.txt", 
-            mime="text/plain", 
-            use_container_width=True
-        )
+        st.download_button("📥 Télécharger Présentation", data=report_text, file_name=f"Report_{entity_name}.txt", mime="text/plain", use_container_width=True)
 
     st.markdown("---")
-
-    # --- AFFICHAGE DES 9 BOXES VIOLETTES ---
-    # Ligne 1 : Les Volumes
+    
+    # --- 5. BOXES VIOLETTES ---
     b1, b2, b3 = st.columns(3)
     with b1: st.markdown(f"<div class='purple-box'><h3>Commandes Reçues</h3><h2>{c_req}</h2><p>{label_evo}: {format_evo(c_req, p_req)}</p></div>", unsafe_allow_html=True)
     with b2: st.markdown(f"<div class='purple-box'><h3>Commandes Livrées</h3><h2>{c_del}</h2><p>{label_evo}: {format_evo(c_del, p_del)}</p></div>", unsafe_allow_html=True)
     with b3: st.markdown(f"<div class='purple-box'><h3>Success Rate</h3><h2>{c_sr:.1%}</h2><p>{label_evo}: {format_evo(c_sr, p_sr)}</p></div>", unsafe_allow_html=True)
     
-    # Ligne 2 : La Finance
     b4, b5, b6 = st.columns(3)
     with b4: st.markdown(f"<div class='purple-box'><h3>GMV Généré</h3><h2>{c_gmv:,.0f} MAD</h2><p>{label_evo}: {format_evo(c_gmv, p_gmv)}</p></div>", unsafe_allow_html=True)
     with b5: st.markdown(f"<div class='purple-box'><h3>Panier Moyen (AOV)</h3><h2>{c_aov:,.0f} MAD</h2><p>{label_evo}: {format_evo(c_aov, p_aov)}</p></div>", unsafe_allow_html=True)
     with b6: st.markdown(f"<div class='purple-box'><h3>Promos (Yassir / Resto)</h3><h2>{c_pa:,.0f} / {c_pr:,.0f}</h2><p>{label_evo}: {format_evo(c_pa, p_pa)} / {format_evo(c_pr, p_pr)}</p></div>", unsafe_allow_html=True)
-
-    # Ligne 3 : L'Opérationnel
+    
     b7, b8, b9 = st.columns(3)
     v_prep = f"{c_prep:.0f} min" if pd.notnull(c_prep) and c_prep > 0 else "N/A"
     v_del = f"{c_dt:.0f} min" if pd.notnull(c_dt) and c_dt > 0 else "N/A"
-    
     with b7: st.markdown(f"<div class='purple-box'><h3>Temps Préparation</h3><h2>{v_prep}</h2><p>{label_evo}: {format_evo(c_prep, p_prep) if v_prep != 'N/A' else '-'}</p></div>", unsafe_allow_html=True)
     with b8: st.markdown(f"<div class='purple-box'><h3>Temps Livraison</h3><h2>{v_del}</h2><p>{label_evo}: {format_evo(c_dt, p_dt) if v_del != 'N/A' else '-'}</p></div>", unsafe_allow_html=True)
     with b9: st.markdown(f"<div class='purple-box'><h3>Analyse Active</h3><h2>{label_evo}</h2><p>Période sélectionnée</p></div>", unsafe_allow_html=True)
 
-    # --- GRAPHIQUE ---
-    if not df_r.empty:
-        df_trend = df_r.groupby('order day').agg(Req=('order id','count'), Deliv=('status', lambda x: (x=='Delivered').sum())).reset_index()
-        fig = px.line(df_trend, x='order day', y=['Req', 'Deliv'], title="Tendance Journalière de la période globale", markers=True)
-        st.plotly_chart(fig, use_container_width=True)
+    # --- 6. GRAPHIQUE ET TOP/FLOP (SI SEMAINE) ---
+    if entity_type == 'Week':
+        st.markdown("#### 📈 Tops & Flops de la Semaine (Accélération GMV)")
+        resto_curr = compute_metrics(c_df, ['Restaurant ID', 'Restaurant Name'])
+        resto_prev = compute_metrics(p_df, ['Restaurant ID', 'Restaurant Name'])
+        comp_w = compare_wow(resto_curr, resto_prev, ['Restaurant ID', 'Restaurant Name'])
+        
+        c_t, c_f = st.columns(2)
+        with c_t:
+            st.success("🏆 Top 10 Accélérations")
+            st.dataframe(comp_w.sort_values('wow GMV', ascending=False).head(10)[['Restaurant Name', 'wow GMV', 'wow GMV %']].style.format({'wow GMV': '{:,.0f}', 'wow GMV %': '{:+.1%}'}), hide_index=True)
+        with c_f:
+            st.error("📉 Flop 10 Chutes")
+            st.dataframe(comp_w.sort_values('wow GMV', ascending=True).head(10)[['Restaurant Name', 'wow GMV', 'wow GMV %']].style.format({'wow GMV': '{:,.0f}', 'wow GMV %': '{:+.1%}'}), hide_index=True)
+
+    if not c_df.empty or not p_df.empty:
+        df_trend = c_df.groupby('order day').agg(Req=('order id','count'), Deliv=('status', lambda x: (x=='Delivered').sum())).reset_index()
+        if not df_trend.empty:
+            st.plotly_chart(px.line(df_trend, x='order day', y=['Req', 'Deliv'], title="Tendance Journalière (Période ciblée)", markers=True), use_container_width=True)
     
     st.markdown("---")
     
-    # --- ACTIONS, NOTES ET TRANSFERT ---
+    # --- 7. NOTES ET SUIVI D'IMPACT ---
     col_act, col_trans = st.columns(2)
-    
     with col_act:
-        st.markdown("#### 📝 Ajouter une Action / Note")
-        nouvelle_note = st.text_area("Description :", placeholder="Relance promo...", key=f"note_{resto_id}")
-        if st.button("💾 Enregistrer la note", key=f"btn_{resto_id}"):
+        st.markdown(f"#### 📝 Ajouter une Note ({entity_name})")
+        nouvelle_note = st.text_area("Description :", key=f"note_{note_id}")
+        if st.button("💾 Enregistrer la note", key=f"btn_{note_id}"):
             ws_notes = crm_sheet.worksheet("Notes_Historique")
             date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-            if df_notes_master.empty: ws_notes.append_row(['Date', 'Restaurant ID', 'Auteur', 'Contenu'])
-            ws_notes.append_row([date_str, str(resto_id), st.session_state.user, nouvelle_note])
-            st.success("Note enregistrée ! Fermez le popup pour actualiser.")
+            ws_notes.append_row([date_str, note_id, st.session_state.user, nouvelle_note])
+            st.success("Note enregistrée ! Fermez pour actualiser.")
 
-        st.markdown("#### 📜 Historique & Impact Avant/Après")
-        notes_r = df_notes_master[df_notes_master['Restaurant ID'].astype(str) == str(resto_id)]
+        st.markdown("#### 📜 Historique & Impact")
+        notes_r = df_notes_master[df_notes_master['Restaurant ID'].astype(str) == note_id]
         if not notes_r.empty:
             for idx_n, row in notes_r.iterrows():
                 with st.expander(f"📅 {row['Date']} par {row['Auteur']}"):
                     st.write(row['Contenu'])
-                    jours = st.radio("Analyse post-action :", [7, 15, 30], format_func=lambda x: f"{x} Jours", horizontal=True, key=f"r_{idx_n}_{resto_id}")
+                    jours = st.radio("Analyse post-action :", [7, 15, 30], format_func=lambda x: f"{x} Jours", horizontal=True, key=f"r_{idx_n}_{note_id}")
                     try:
                         d_note = pd.to_datetime(row['Date']).date()
-                        df_r['date_only'] = df_r['order day'].dt.date
-                        avant = df_r[(df_r['date_only'] < d_note) & (df_r['date_only'] >= d_note - timedelta(days=jours))]
-                        apres = df_r[(df_r['date_only'] >= d_note) & (df_r['date_only'] <= d_note + timedelta(days=jours))]
+                        # Si la note est sur une semaine complète, on compare sur tout le dataset, sinon sur l'entité filtrée
+                        base_df = df_merged if entity_type == 'Week' else df_r
+                        base_df['date_only'] = base_df['order day'].dt.date
+                        avant = base_df[(base_df['date_only'] < d_note) & (base_df['date_only'] >= d_note - timedelta(days=jours))]
+                        apres = base_df[(base_df['date_only'] >= d_note) & (base_df['date_only'] <= d_note + timedelta(days=jours))]
                         g_av = avant[avant['status'] == 'Delivered']['item total'].sum()
                         g_ap = apres[apres['status'] == 'Delivered']['item total'].sum()
                         e_ap = (g_ap / g_av - 1) if g_av > 0 else 0
                         st.info(f"📊 Impact ({jours}j) : GMV Avant = {g_av:,.0f} MAD | GMV Après = {g_ap:,.0f} MAD ({e_ap:+.1%})")
                     except: pass
-        else:
-            st.info("Aucune note pour ce restaurant.")
+        else: st.info("Aucune note pour cette entité.")
 
     with col_trans:
-        st.markdown("#### 🔄 Transférer le restaurant")
-        pipe_am = df_pipeline_master[df_pipeline_master['Restaurant ID'].astype(str) == str(resto_id)]
-        current_am = pipe_am['AM_Name'].iloc[0] if not pipe_am.empty else "Global / Inconnu"
-        st.write(f"Pipeline actuelle : **{current_am}**")
-        nouveau_am = st.selectbox("Transférer vers :", ["Houda", "Chaima", "Najwa", "Imane"], key=f"t_{resto_id}")
-        
-        if st.button("🚀 Valider le transfert", key=f"bt_t_{resto_id}"):
-            ws_pipe = crm_sheet.worksheet("Pipelines")
-            try:
-                cell = ws_pipe.find(str(resto_id), in_column=1)
-                ws_pipe.update_cell(cell.row, 3, nouveau_am)
-            except:
-                ws_pipe.append_row([str(resto_id), resto_name, nouveau_am])
-            st.success(f"Transféré à {nouveau_am} ! Fermez le popup pour actualiser.")
+        if entity_type == 'Restaurant':
+            st.markdown("#### 🔄 Transférer le restaurant")
+            pipe_am = df_pipeline_master[df_pipeline_master['Restaurant ID'].astype(str) == str(entity_id)]
+            current_am = pipe_am['AM_Name'].iloc[0] if not pipe_am.empty else "Global / Inconnu"
+            st.write(f"Pipeline actuelle : **{current_am}**")
+            nouveau_am = st.selectbox("Transférer vers :", ["Houda", "Chaima", "Najwa", "Imane"], key=f"t_{note_id}")
+            if st.button("🚀 Valider le transfert", key=f"bt_t_{note_id}"):
+                ws_pipe = crm_sheet.worksheet("Pipelines")
+                try:
+                    cell = ws_pipe.find(str(entity_id), in_column=1)
+                    ws_pipe.update_cell(cell.row, 3, nouveau_am)
+                except:
+                    ws_pipe.append_row([str(entity_id), entity_name, nouveau_am])
+                st.success(f"Transféré à {nouveau_am} !")
 
+
+# ==========================================
+# 6. ONGLETS ET AFFICHAGES VISUELS
+# ==========================================
+tabs = st.tabs(["🌍 1. Macro", "📈 2. Overview", "❌ 3. Annulations", "🤖 4. Auto", "💻 5. Caisse.ma", "✨ 6. New", "👻 7. Inactifs", "🏆 8. Héros", "🍕 9. Catégories"])
+
+# ----------------------------------------
+# ONGLET 1 : ANALYSE GLOBAL (MACRO)
+# ----------------------------------------
+with tabs[0]:
+    st.markdown("#### 🌍 Analyse Macro des Performances (🖱️ Cliquez sur une semaine)")
+    vue_temporelle = st.radio("Sélectionnez la vue globale :", ["📊 Par Semaine", "📅 Par Jour"], horizontal=True)
+    df_macro_base = df_merged.copy()
+    df_macro_base['Période'] = df_macro_base['order day'].dt.strftime('%Y-%m-%d') if vue_temporelle == "📅 Par Jour" else df_macro_base['Week']
+
+    df_macro = df_macro_base.groupby('Période').agg(
+        Reçu=('order id', 'count'), Livré=('status', lambda x: (x == 'Delivered').sum()),
+        GMV=('item total', lambda x: x[df_macro_base.loc[x.index, 'status'] == 'Delivered'].sum()),
+        CA=('admin earnings', lambda x: x[df_macro_base.loc[x.index, 'status'] == 'Delivered'].sum())
+    ).reset_index()
+
+    df_macro['AOV'] = (df_macro['GMV'] / df_macro['Livré'].replace(0, np.nan)).fillna(0)
+    df_macro = df_macro.sort_values(by='Période', ascending=True)
+
+    for col in ['Reçu', 'Livré', 'GMV', 'CA', 'AOV']: df_macro[f'V. {col}'] = df_macro[col].pct_change()
+    df_macro_display = df_macro.sort_values(by='Période', ascending=False).copy()
+    for col in ['V. Reçu', 'V. Livré', 'V. GMV', 'V. CA', 'V. AOV']: df_macro_display[col] = df_macro_display[col].apply(lambda x: f"{x:+.1%}" if pd.notnull(x) else "-")
+    for col in ['GMV', 'CA', 'AOV']: df_macro_display[col] = df_macro_display[col].apply(lambda x: f"{x:,.2f}")
+
+    disp_macro = df_macro_display[['Période', 'Reçu', 'Livré', 'GMV', 'CA', 'AOV', 'V. Reçu', 'V. Livré', 'V. GMV', 'V. CA', 'V. AOV']]
+    ev_macro = st.dataframe(disp_macro, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
+    
+    if ev_macro.selection.rows:
+        idx = ev_macro.selection.rows[0]
+        if "Week" in str(disp_macro.iloc[idx]['Période']):
+            st.session_state.popup_entity_type = 'Week'
+            st.session_state.popup_entity_id = disp_macro.iloc[idx]['Période']
+            st.session_state.popup_entity_name = disp_macro.iloc[idx]['Période']
+
+    st.markdown("---")
+    df_daily = compute_metrics(df_merged, ['order day']).sort_values('order day')
+    col_g1, col_g2 = st.columns(2)
+    with col_g1: st.plotly_chart(px.line(df_daily, x="order day", y="GMV", title="Tendance GMV", markers=True), use_container_width=True)
+    with col_g2: st.plotly_chart(px.line(df_daily, x="order day", y="Requested", title="Tendance Commandes Reçues", markers=True, color_discrete_sequence=['#f39c12']), use_container_width=True)
+
+# ----------------------------------------
+# ONGLET 2 : OVERVIEW PIPELINE
+# ----------------------------------------
+with tabs[1]:
+    st.markdown("#### 📋 Base Détaillée (🖱️ Cliquez sur une ligne)")
+    resto_comp = compare_wow(df_current_full, df_prev_full, ['Restaurant ID', 'Restaurant Name', 'Area'])
+    
+    cols = ['Restaurant ID', 'Tier', 'Area', 'Restaurant Name', 'Requested', 'Delivered', 'Success Rate', 'Taux Acceptation', 'wow T.A', 'GMV', 'wow GMV %']
+    df_disp = resto_comp[cols].copy()
+    for c in ['Success Rate', 'Taux Acceptation', 'wow T.A', 'wow GMV %']: df_disp[c] = df_disp[c].apply(lambda x: f"{x:+.1%}")
+    for c in ['GMV']: df_disp[c] = df_disp[c].apply(lambda x: f"{x:,.0f}")
+
+    event = st.dataframe(df_disp, column_config={"Restaurant ID": None}, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
+    if event.selection.rows:
+        st.session_state.popup_entity_type = 'Restaurant'
+        st.session_state.popup_entity_id = df_disp.iloc[event.selection.rows[0]]['Restaurant ID']
+        st.session_state.popup_entity_name = df_disp.iloc[event.selection.rows[0]]['Restaurant Name']
+
+# ----------------------------------------
+# ONGLET 3 ET 4 : ANNULATIONS & AUTO
+# ----------------------------------------
+with tabs[2]:
+    st.markdown("#### ❌ Surveillance des Annulations")
+    df_canc_curr = df_current[df_current['status'].str.contains('Cancelled', case=False, na=False)]
+    if not df_canc_curr.empty:
+        reasons = df_canc_curr['cancellation reason '].value_counts().reset_index()
+        reasons.columns = ['Motif', 'Nombre']
+        st.plotly_chart(px.pie(reasons, names='Motif', values='Nombre', hole=0.4), use_container_width=True)
+
+with tabs[3]:
+    st.markdown("#### 🤖 Automatisation")
+    if 'Accepted By' in df_current.columns:
+        df_current['Is_Auto'] = df_current['Accepted By'].str.contains('restaurant', case=False, na=False)
+        auto_r = df_current.groupby('Is_Auto').agg(Req=('order id', 'count'), Del=('status', lambda x: (x == 'Delivered').sum()), GMV=('item total', lambda x: x[df_current.loc[x.index, 'status'] == 'Delivered'].sum())).reset_index()
+        auto_r['Type'] = auto_r['Is_Auto'].map({True: '🤖 Automatisé', False: '👨‍💻 Manuel'})
+        auto_r['Success Rate'] = (auto_r['Del'] / auto_r['Req']).fillna(0)
+        st.dataframe(auto_r[['Type', 'Req', 'Del', 'Success Rate', 'GMV']].style.format({'Success Rate': '{:.1%}', 'GMV': '{:,.0f}'}), hide_index=True)
+
+def merge_ext(df_ext, comp):
+    res = pd.merge(pd.merge(df_ext[['Restaurant ID']], liste_attendue, on='Restaurant ID', how='inner'), comp.drop(columns=['Restaurant Name'], errors='ignore'), on='Restaurant ID', how='left')
+    for m in ['Requested', 'Delivered', 'GMV', 'wow GMV', 'wow GMV %', 'Success Rate', 'Taux Acceptation', 'wow delivered %']:
+        if m in res.columns: res[m] = res[m].fillna(0)
+    return res
+
+# ----------------------------------------
+# ONGLETS 5, 6, 7 : Caisse, New, Inactifs
+# ----------------------------------------
+with tabs[4]:
+    st.markdown("#### 💻 Caisse.ma (🖱️ Cliquable)")
+    if not df_caisse.empty:
+        df_c_comp = merge_ext(df_caisse, resto_comp)
+        if not df_c_comp.empty: 
+            disp_caisse = df_c_comp[['Restaurant ID', 'Restaurant Name', 'Requested', 'GMV', 'wow GMV %', 'Success Rate']].copy()
+            ev_c = st.dataframe(disp_caisse.style.format({'GMV': '{:,.0f}', 'wow GMV %': '{:+.1%}', 'Success Rate': '{:.1%}'}), column_config={"Restaurant ID": None}, hide_index=True, on_select="rerun", selection_mode="single-row")
+            if ev_c.selection.rows:
+                st.session_state.popup_entity_type = 'Restaurant'
+                st.session_state.popup_entity_id = disp_caisse.iloc[ev_c.selection.rows[0]]['Restaurant ID']
+                st.session_state.popup_entity_name = disp_caisse.iloc[ev_c.selection.rows[0]]['Restaurant Name']
+
+with tabs[5]:
+    st.markdown("#### ✨ New Restaurants (🖱️ Cliquable)")
+    if not df_new.empty:
+        df_n_comp = merge_ext(df_new, resto_comp)
+        if not df_n_comp.empty: 
+            disp_new = df_n_comp[['Restaurant ID', 'Restaurant Name', 'Requested', 'GMV', 'Success Rate']].copy()
+            ev_n = st.dataframe(disp_new.style.format({'GMV': '{:,.0f}', 'Success Rate': '{:.1%}'}), column_config={"Restaurant ID": None}, hide_index=True, on_select="rerun", selection_mode="single-row")
+            if ev_n.selection.rows:
+                st.session_state.popup_entity_type = 'Restaurant'
+                st.session_state.popup_entity_id = disp_new.iloc[ev_n.selection.rows[0]]['Restaurant ID']
+                st.session_state.popup_entity_name = disp_new.iloc[ev_n.selection.rows[0]]['Restaurant Name']
+
+with tabs[6]:
+    st.markdown("#### 👻 Inactifs")
+    j_inactifs = st.radio("Signaler les inactifs depuis :", [3, 7, 15, 30], format_func=lambda x: f"{x} Jours", horizontal=True)
+    max_d = df_merged['order day'].max()
+    restos_actifs = df_merged[df_merged['order day'] >= max_d - timedelta(days=j_inactifs)]['Restaurant ID'].unique()
+    restos_inactifs = liste_attendue[~liste_attendue['Restaurant ID'].isin(restos_actifs)]
+    st.error(f"⚠️ {len(restos_inactifs)} restaurants inactifs depuis {j_inactifs} jours")
+    st.dataframe(restos_inactifs[['Restaurant Name']], hide_index=True)
+
+# ----------------------------------------
+# ONGLETS 8 & 9 : Héros & Catégories (MAINTENANT CLIQUABLES)
+# ----------------------------------------
+with tabs[7]:
+    st.markdown("#### 🏆 Produits Héros (🖱️ Cliquable)")
+    if 'Food Item' in df_current.columns:
+        df_items = df_current.assign(Item=df_current['Food Item'].astype(str).str.replace(r'\[|\]|\{\d+\}', '', regex=True).str.split(',')).explode('Item')
+        df_items['Item'] = df_items['Item'].str.strip()
+        df_items = df_items[(df_items['Item'] != 'nan') & (df_items['Item'] != '')]
+        top_items = df_items['Item'].value_counts().reset_index()
+        top_items.columns = ['Produit', 'Nombre']
+        
+        c_p1, c_p2 = st.columns([1, 2])
+        with c_p1: 
+            ev_p = st.dataframe(top_items.head(15), hide_index=True, on_select="rerun", selection_mode="single-row")
+            if ev_p.selection.rows:
+                st.session_state.popup_entity_type = 'Item'
+                st.session_state.popup_entity_id = top_items.iloc[ev_p.selection.rows[0]]['Produit']
+                st.session_state.popup_entity_name = top_items.iloc[ev_p.selection.rows[0]]['Produit']
+        with c_p2: st.plotly_chart(px.bar(top_items.head(10), x='Nombre', y='Produit', orientation='h').update_layout(yaxis={'categoryorder':'total ascending'}), use_container_width=True)
+
+with tabs[8]:
+    st.markdown("#### 🍕 Catégories Food (🖱️ Cliquable)")
+    if 'Food Category' in df_current.columns:
+        df_current_cat = df_current[df_current['Food Category'].astype(str) != 'nan'].copy()
+        df_current_cat['Food Category'] = df_current_cat['Food Category'].astype(str).str.replace(r'\[|\]|/', '', regex=True).str.strip()
+        df_cat = compute_metrics(df_current_cat, ['Food Category'])
+        df_cat['Success Rate'] = (df_cat['Delivered'] / df_cat['Requested'].replace(0, np.nan)).fillna(0)
+        df_cat['AOV'] = (df_cat['GMV'] / df_cat['Delivered'].replace(0, np.nan)).fillna(0)
+        
+        df_cat_disp = df_cat.sort_values('Requested', ascending=False)
+        disp_cat = df_cat_disp[['Food Category', 'Requested', 'Delivered', 'Success Rate', 'GMV', 'AOV']].copy()
+        
+        ev_cat = st.dataframe(disp_cat.style.format({'Success Rate': '{:.1%}', 'GMV': '{:,.0f}', 'AOV': '{:,.0f}'}), hide_index=True, use_container_width=True, on_select="rerun", selection_mode="single-row")
+        if ev_cat.selection.rows:
+            st.session_state.popup_entity_type = 'Category'
+            st.session_state.popup_entity_id = disp_cat.iloc[ev_cat.selection.rows[0]]['Food Category']
+            st.session_state.popup_entity_name = disp_cat.iloc[ev_cat.selection.rows[0]]['Food Category']
+
+
+# ==========================================
+# GESTION SÉCURISÉE DU POPUP (FIN DU FICHIER)
+# ==========================================
+if st.session_state.get("popup_entity_id") is not None:
+    popup_360(st.session_state.popup_entity_type, st.session_state.popup_entity_id, st.session_state.popup_entity_name)
+    # On vide la mémoire pour éviter que le popup s'ouvre en boucle et fasse l'erreur "Duplicate Element ID"
+    st.session_state.popup_entity_id = None
+    st.session_state.popup_entity_type = None
+    st.session_state.popup_entity_name = None
 # ==========================================
 # 6. ONGLETS ET AFFICHAGES VISUELS
 # ==========================================
