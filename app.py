@@ -78,13 +78,11 @@ vue_globale = st.radio("Portée de l'analyse :", ["🇲🇦 Global Maroc", "🎯
 col_am, col_upload = st.columns([1, 2])
 with col_am:
     if vue_globale == "🎯 Par Account Manager (Pipeline)":
-        # MISE À JOUR DES NOMS ICI
         am_choisi = st.selectbox("Sélectionnez la Pipeline", ["Houda", "Chaima", "Najwa", "Imane"], label_visibility="collapsed")
     else:
         am_choisi = "Global"
 
 with col_upload:
-    # Menu déroulant généré automatiquement depuis Drive
     noms_fichiers = [f['name'] for f in fichiers_disponibles]
     fichier_choisi = st.selectbox("📂 Fichier de données (Google Drive) :", noms_fichiers, label_visibility="collapsed")
 
@@ -106,15 +104,12 @@ def load_drive_csv(file_id):
 
 try:
     with st.spinner(f'Téléchargement et traitement de {fichier_choisi}...'):
-        # On trouve l'ID du fichier choisi par l'utilisateur
         id_choisi = next(f['id'] for f in fichiers_disponibles if f['name'] == fichier_choisi)
         df_data = load_drive_csv(id_choisi)
         
-        # Standardisation
         if "restaurant name" in df_data.columns:
             df_data.rename(columns={"restaurant name": "Restaurant Name"}, inplace=True)
 
-        # Logique de fusion Global vs Pipeline (lus localement sur GitHub)
         if vue_globale == "🎯 Par Account Manager (Pipeline)":
             df_pipeline = pd.read_csv(f"Pipeline - {am_choisi}.csv", sep=None, engine='python')
             if 'Restaurant Name' in df_data.columns and 'Restaurant Name' in df_pipeline.columns:
@@ -133,14 +128,12 @@ try:
         df_merged = df_merged[~df_merged['Restaurant Name'].str.contains(pattern_exclus, case=False, na=False)]
         liste_attendue = liste_attendue[~liste_attendue['Restaurant Name'].str.contains(pattern_exclus, case=False, na=False)]
 
-        # Fichiers annexes (sur GitHub)
         try: df_caisse = pd.read_csv("CaisseMA.csv", sep=None, engine='python')
         except: df_caisse = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name'])
         
         try: df_new = pd.read_csv("NewRestaurants.csv", sep=None, engine='python')
         except: df_new = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name'])
 
-        # Gestion des dates et semaines
         df_merged['order day'] = pd.to_datetime(df_merged['order day'])
         df_merged['Week'] = "Week " + df_merged['order day'].dt.isocalendar().week.astype(str).str.zfill(2)
         semaines_dispos = sorted(df_merged['Week'].unique(), reverse=True)
@@ -149,7 +142,6 @@ except Exception as e:
     st.error(f"❌ Erreur critique lors de la lecture du fichier : {e}")
     st.stop()
 
-# Filtres Latéraux (Sidebar)
 with st.sidebar:
     st.markdown("### 📅 Filtres Temporels")
     semaine_selectionnee = st.selectbox("Semaine d'analyse principale", semaines_dispos)
@@ -182,22 +174,33 @@ def compute_metrics(df_subset, group_cols):
 def compare_wow(df_curr, df_prev, merge_on):
     df_comp = pd.merge(df_curr, df_prev, on=merge_on, suffixes=('', '_prev'), how='left').fillna(0)
     
-    df_comp['Success Rate'] = (df_comp['Delivered'] / df_comp['Requested']).fillna(0)
-    df_comp['Taux Acceptation'] = (df_comp['Auto_Accepted'] / df_comp['Requested']).fillna(0)
-    df_comp['Taux Cancellation'] = (df_comp['CancelledByRestaurant'] / df_comp['Requested']).fillna(0)
-    df_comp['AOV'] = (df_comp['GMV'] / df_comp['Delivered']).fillna(0)
+    # 🛡️ PROTECTION CONTRE LA DIVISION PAR ZÉRO : On remplace 0 par NaN avant la division
+    req_curr_safe = df_comp['Requested'].replace(0, np.nan)
+    req_prev_safe = df_comp['Requested_prev'].replace(0, np.nan)
+    del_curr_safe = df_comp['Delivered'].replace(0, np.nan)
+    del_prev_safe = df_comp['Delivered_prev'].replace(0, np.nan)
+    gmv_prev_safe = df_comp['GMV_prev'].replace(0, np.nan)
     
-    ta_prev = (df_comp['Auto_Accepted_prev'] / df_comp['Requested_prev']).fillna(0)
-    tc_prev = (df_comp['CancelledByRestaurant_prev'] / df_comp['Requested_prev']).fillna(0)
+    # Calculs Taux Actuels
+    df_comp['Success Rate'] = (df_comp['Delivered'] / req_curr_safe).fillna(0)
+    df_comp['Taux Acceptation'] = (df_comp['Auto_Accepted'] / req_curr_safe).fillna(0)
+    df_comp['Taux Cancellation'] = (df_comp['CancelledByRestaurant'] / req_curr_safe).fillna(0)
+    df_comp['AOV'] = (df_comp['GMV'] / del_curr_safe).fillna(0)
     
+    # Calculs Taux Précédents
+    ta_prev = (df_comp['Auto_Accepted_prev'] / req_prev_safe).fillna(0)
+    tc_prev = (df_comp['CancelledByRestaurant_prev'] / req_prev_safe).fillna(0)
+    
+    # Evolutions WoW
     df_comp['wow delivered'] = df_comp['Delivered'] - df_comp['Delivered_prev']
-    df_comp['wow delivered %'] = (df_comp['Delivered'] / df_comp['Delivered_prev'] - 1).replace([np.inf, -np.inf], 0).fillna(0)
+    df_comp['wow delivered %'] = (df_comp['Delivered'] / del_prev_safe - 1).fillna(0)
     df_comp['wow GMV'] = df_comp['GMV'] - df_comp['GMV_prev']
-    df_comp['wow GMV %'] = (df_comp['GMV'] / df_comp['GMV_prev'] - 1).replace([np.inf, -np.inf], 0).fillna(0)
+    df_comp['wow GMV %'] = (df_comp['GMV'] / gmv_prev_safe - 1).fillna(0)
+    
     df_comp['wow T.A'] = df_comp['Taux Acceptation'] - ta_prev
     df_comp['wow Cancellation'] = df_comp['Taux Cancellation'] - tc_prev
     df_comp['Wow CA'] = df_comp['CA'] - df_comp['CA_prev']
-    df_comp['Wow AOV'] = df_comp['AOV'] - (df_comp['GMV_prev'] / df_comp['Delivered_prev']).fillna(0)
+    df_comp['Wow AOV'] = df_comp['AOV'] - (df_comp['GMV_prev'] / del_prev_safe).fillna(0)
     df_comp['Wow Promo Order'] = (df_comp['Promo_Restaurant'] + df_comp['Promo_Admin']) - (df_comp['Promo_Restaurant_prev'] + df_comp['Promo_Admin_prev'])
     df_comp['Wow LR_LG_Costs'] = df_comp['LR_LG_Costs'] - df_comp['LR_LG_Costs_prev']
     
@@ -243,7 +246,8 @@ with tabs[0]:
         CA=('admin earnings', lambda x: x[df_macro_base.loc[x.index, 'status'] == 'Delivered'].sum())
     ).reset_index()
 
-    df_macro['AOV'] = (df_macro['GMV'] / df_macro['Livré']).fillna(0)
+    # Protection Zéro Division Macro
+    df_macro['AOV'] = (df_macro['GMV'] / df_macro['Livré'].replace(0, np.nan)).fillna(0)
     df_macro = df_macro.sort_values(by='Période', ascending=True)
 
     df_macro['V. Reçu'] = df_macro['Reçu'].pct_change()
@@ -360,7 +364,8 @@ with tabs[3]:
             Delivered=('status', lambda x: (x == 'Delivered').sum()),
             GMV=('item total', lambda x: x[df_current.loc[x.index, 'status'] == 'Delivered'].sum())
         ).reset_index()
-        auto_recap['Success Rate'] = auto_recap['Delivered'] / auto_recap['Requested']
+        
+        auto_recap['Success Rate'] = (auto_recap['Delivered'] / auto_recap['Requested'].replace(0, np.nan)).fillna(0)
         auto_recap['Type'] = auto_recap['Is_Auto'].map({True: '🤖 Automatisé (Via App/Caisse)', False: '👨‍💻 Manuel / Admin'})
         
         st.markdown("**📊 Impact de l'Automatisation sur les performances globales**")
@@ -469,8 +474,8 @@ with tabs[8]:
         df_current_cat = df_current[df_current['Food Category'] != 'nan']
 
         df_cat = compute_metrics(df_current_cat, ['Food Category'])
-        df_cat['Success Rate'] = (df_cat['Delivered'] / df_cat['Requested']).fillna(0)
-        df_cat['AOV'] = (df_cat['GMV'] / df_cat['Delivered']).fillna(0)
+        df_cat['Success Rate'] = (df_cat['Delivered'] / df_cat['Requested'].replace(0, np.nan)).fillna(0)
+        df_cat['AOV'] = (df_cat['GMV'] / df_cat['Delivered'].replace(0, np.nan)).fillna(0)
         
         df_cat_disp = df_cat.sort_values('Requested', ascending=False).copy()
         
