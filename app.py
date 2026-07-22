@@ -477,13 +477,42 @@ with tabs[0]:
     area_comp = compare_wow(area_curr, area_prev, ['city', 'Area'])
     
     col_city, col_area = st.columns(2)
+    
     with col_city:
-        st.markdown("##### 🏙️ Performances par Ville")
-        st.dataframe(city_comp[['city', 'Requested', 'wow Req %', 'GMV', 'wow GMV %', 'Success Rate']].sort_values('Requested', ascending=False).style.format({'wow Req %': '{:+.1%}', 'GMV': '{:,.0f}', 'wow GMV %': '{:+.1%}', 'Success Rate': '{:.1%}'}), hide_index=True)
-    with col_area:
-        st.markdown("##### 🏘️ Performances par Zone (Area)")
-        st.dataframe(area_comp[['Area', 'Requested', 'wow Req %', 'GMV', 'wow GMV %', 'Success Rate']].sort_values('Requested', ascending=False).head(15).style.format({'wow Req %': '{:+.1%}', 'GMV': '{:,.0f}', 'wow GMV %': '{:+.1%}', 'Success Rate': '{:.1%}'}), hide_index=True)
+        st.markdown("##### 🏙️ Performances par Ville (🖱️ Cliquable)")
+        disp_city = city_comp[['city', 'Requested', 'wow Req %', 'GMV', 'wow GMV %', 'Success Rate']].sort_values('Requested', ascending=False)
+        ev_city = st.dataframe(
+            disp_city.style.format({'wow Req %': '{:+.1%}', 'GMV': '{:,.0f}', 'wow GMV %': '{:+.1%}', 'Success Rate': '{:.1%}'}), 
+            hide_index=True, 
+            use_container_width=True, 
+            on_select="rerun", 
+            selection_mode="single-row", 
+            key="city_table_select"
+        )
+        if is_new_selection("city_table_select", ev_city.selection.rows):
+            idx_c = ev_city.selection.rows[0]
+            val_city = disp_city.iloc[idx_c]['city']
+            st.session_state.popup_entity_type = 'City'
+            st.session_state.popup_entity_id = val_city
+            st.session_state.popup_entity_name = f"Ville : {val_city}"
 
+    with col_area:
+        st.markdown("##### 🏘️ Performances par Zone (🖱️ Cliquable)")
+        disp_area = area_comp[['Area', 'Requested', 'wow Req %', 'GMV', 'wow GMV %', 'Success Rate']].sort_values('Requested', ascending=False).head(15)
+        ev_area = st.dataframe(
+            disp_area.style.format({'wow Req %': '{:+.1%}', 'GMV': '{:,.0f}', 'wow GMV %': '{:+.1%}', 'Success Rate': '{:.1%}'}), 
+            hide_index=True, 
+            use_container_width=True, 
+            on_select="rerun", 
+            selection_mode="single-row", 
+            key="area_table_select"
+        )
+        if is_new_selection("area_table_select", ev_area.selection.rows):
+            idx_a = ev_area.selection.rows[0]
+            val_area = disp_area.iloc[idx_a]['Area']
+            st.session_state.popup_entity_type = 'Area'
+            st.session_state.popup_entity_id = val_area
+            st.session_state.popup_entity_name = f"Zone : {val_area}"
 # ----------------------------------------
 # ONGLET 2 : OVERVIEW PIPELINE
 # ----------------------------------------
