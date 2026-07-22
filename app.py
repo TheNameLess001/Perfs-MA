@@ -447,6 +447,19 @@ with tabs[0]:
         st.plotly_chart(px.line(df_daily, x="order day", y="GMV", title="Tendance GMV", markers=True), use_container_width=True, key="macro_gmv_chart")
     with col_g2: 
         st.plotly_chart(px.line(df_daily, x="order day", y="Requested", title="Tendance Commandes Reçues", markers=True, color_discrete_sequence=['#f39c12']), use_container_width=True, key="macro_req_chart")
+st.markdown("---")
+    city_curr, city_prev = compute_metrics(df_current, ['city']), compute_metrics(df_prev, ['city'])
+    city_comp = compare_wow(city_curr, city_prev, ['city'])
+    area_curr, area_prev = compute_metrics(df_current, ['city', 'Area']), compute_metrics(df_prev, ['city', 'Area'])
+    area_comp = compare_wow(area_curr, area_prev, ['city', 'Area'])
+    
+    col_city, col_area = st.columns(2)
+    with col_city:
+        st.markdown("##### 🏙️ Performances par Ville")
+        st.dataframe(city_comp[['city', 'Requested', 'wow Req %', 'GMV', 'wow GMV %', 'Success Rate']].sort_values('Requested', ascending=False).style.format({'wow Req %': '{:+.1%}', 'GMV': '{:,.0f}', 'wow GMV %': '{:+.1%}', 'Success Rate': '{:.1%}'}), hide_index=True)
+    with col_area:
+        st.markdown("##### 🏘️ Performances par Zone (Area)")
+        st.dataframe(area_comp[['Area', 'Requested', 'wow Req %', 'GMV', 'wow GMV %', 'Success Rate']].sort_values('Requested', ascending=False).head(15).style.format({'wow Req %': '{:+.1%}', 'GMV': '{:,.0f}', 'wow GMV %': '{:+.1%}', 'Success Rate': '{:.1%}'}), hide_index=True)
 
 # ----------------------------------------
 # ONGLET 2 : OVERVIEW PIPELINE
