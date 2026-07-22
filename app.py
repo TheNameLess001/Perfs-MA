@@ -221,24 +221,64 @@ with st.sidebar:
     st.info(f"**Commandes totales (Historique) :** {len(df_merged):,}")
 
 # ==========================================
-# 4. MOTEUR DE CALCULS & PROTECTION ZERO
+# 4. MOTEUR DE CALCULS & PROTECTION ZERO (CORRIGÉ & ROBUSTE)
 # ==========================================
 def compute_metrics(df_subset, group_cols):
-    return df_subset.groupby(group_cols).agg(
-        Requested=('order id', 'count'), Delivered=('status', lambda x: (x == 'Delivered').sum()),
-        Auto_Accepted=('Accepted By', lambda x: x.str.contains('restaurant', case=False, na=False).sum() if 'Accepted By' in df_subset.columns else 0),
-        CancelledByRestaurant=('status', lambda x: x.str.contains('restaurant', case=False, na=False).sum()),
-        GMV=('item total', lambda x: x[df_subset.loc[x.index, 'status'] == 'Delivered'].sum()),
-        CA=('admin earnings', lambda x: x[df_subset.loc[x.index, 'status'] == 'Delivered'].sum()),
-        Commission=('restaurant commission', lambda x: x[df_subset.loc[x.index, 'status'] == 'Delivered'].sum()),
-        Promo_Restaurant=('coupon restaurant', 'sum'), Promo_Admin=('coupon admin', 'sum'),
-        LR_LG_Costs=('driver payout', 'sum')
-    ).reset_index()
+    if df_subset.empty:
+        cols = list(group_cols) + ['Requested', 'Delivered', 'Auto_Accepted', 'CancelledByRestaurant', 'GMV', 'CA', 'Commission', 'Promo_Restaurant', 'Promo_Admin', 'LR_LG_Costs']
+        return pd.DataFrame(columns=cols)
+
+    # Dictionnaire d'agrégations avec sécurité sur les colonnes manquantes
+    agg_dict = {
+        'Requested': ('order id', 'count'),
+        'Delivered': ('status', lambda x: (x == 'Delivered').sum() if 'status' in df_subset.columns else 0),
+        'Auto_Accepted': ('Accepted By' if 'Accepted By' in df_subset.columns else 'order id', 
+                          lambda x: x.astype(str).str.contains('restaurant', case=False, na=False).sum() if 'Accepted By' in df_subset.columns else 0),
+        'CancelledByRestaurant': ('status' if 'status' in df_subset.columns else 'order id', 
+                                   lambda x: x.astype(str).str.contains('restaurant', case=False, na=False).sum() if 'status' in df_subset.columns else 0),
+        'GMV': ('item total' if 'item total' in df_subset.columns else 'order id', 
+                lambda x: x[df_subset.loc[x.index, 'status'] == 'Delivered'].sum() if ('item total' in df_subset.columns and 'status' in df_subset.columns) else 0),
+        'CA': ('admin earnings' if 'admin earnings' in df_subset.columns else 'order id', 
+               lambda x: x[df_subset.loc[x.index, 'status'] == 'Delivered'].sum() if ('admin earnings' in df_subset.columns and 'status' in df_subset.columns) else 0),
+        'Commission': ('restaurant commission' if 'restaurant commission' in df_subset.columns else 'order id', 
+                       lambda x: x[df_subset.loc[x.index, 'status'] == 'Delivered'].sum() if ('restaurant commission' in df_subset.columns and 'status' in df_subset.columns) else 0),
+        'Promo_Restaurant': ('coupon restaurant' if 'coupon restaurant' in df_subset.columns else 'order id', 
+                            lambda x: x.sum() if 'coupon restaurant' in df_subset.columns else 0),
+        'Promo_Admin': ('coupon admin' if 'coupon admin' in df_subset.columns else 'order id', 
+                        lambda x: x.sum() if 'coupon admin' in df_subset.columns else 0),
+        'LR_LG_Costs': ('driver payout' if 'driver payout' in df_subset.columns else 'order id', 
+                        lambda x: x.sum() if 'driver payout' in df_subset.columns else 0)
+    }
+
+    res = df_subset.groupby(group_cols).agg(**agg_dict).reset_index()
+
+    # FORCE LA CONVERSION EN FLOAT/INT NUMÉRIQUE STANDARD (CORRECTION FIX PYARROW)
+    num_cols = ['Requested', 'Delivered', 'Auto_Accepted', 'CancelledByRestaurant', 'GMV', 'CA', 'Commission', 'Promo_Restaurant', 'Promo_Admin', 'LR_LG_Costs']
+    for c in num_cols:
+        if c in res.columns:
+            res[c] = pd.to_numeric(res[c], errors='coerce').fillna(0)
+
+    return res
 
 def compare_wow(df_curr, df_prev, merge_on):
     df_comp = pd.merge(df_curr, df_prev, on=merge_on, suffixes=('', '_prev'), how='left').fillna(0)
-    req_curr_safe, req_prev_safe = df_comp['Requested'].replace(0, np.nan), df_comp['Requested_prev'].replace(0, np.nan)
-    del_curr_safe, del_prev_safe = df_comp['Delivered'].replace(0, np.nan), df_comp['Delivered_prev'].replace(0, np.nan)
+
+    # GARANTIT QUE TOUTES LES SÉRIES SONT EN NUMÉRIQUE PURE AVANT DIVISION
+    num_cols = [
+        'Requested', 'Requested_prev', 'Delivered', 'Delivered_prev', 
+        'Auto_Accepted', 'Auto_Accepted_prev', 'CancelledByRestaurant', 'CancelledByRestaurant_prev', 
+        'GMV', 'GMV_prev', 'CA', 'CA_prev', 'Commission', 'Commission_prev',
+        'Promo_Restaurant', 'Promo_Restaurant_prev', 'Promo_Admin', 'Promo_Admin_prev',
+        'LR_LG_Costs', 'LR_LG_Costs_prev'
+    ]
+    for c in num_cols:
+        if c in df_comp.columns:
+            df_comp[c] = pd.to_numeric(df_comp[c], errors='coerce').fillna(0)
+
+    req_curr_safe = df_comp['Requested'].replace(0, np.nan)
+    req_prev_safe = df_comp['Requested_prev'].replace(0, np.nan)
+    del_curr_safe = df_comp['Delivered'].replace(0, np.nan)
+    del_prev_safe = df_comp['Delivered_prev'].replace(0, np.nan)
     gmv_prev_safe = df_comp['GMV_prev'].replace(0, np.nan)
     
     df_comp['Success Rate'] = (df_comp['Delivered'] / req_curr_safe).fillna(0)
@@ -259,9 +299,12 @@ def compare_wow(df_curr, df_prev, merge_on):
     df_comp['Wow AOV'] = df_comp['AOV'] - (df_comp['GMV_prev'] / del_prev_safe).fillna(0)
     
     if not df_comp.empty and 'GMV' in df_comp.columns:
-        if len(df_comp) >= 3: df_comp['Tier'] = pd.qcut(df_comp['GMV'].rank(method='first'), q=[0, 0.4, 0.8, 1.0], labels=['Tier C', 'Tier B', 'Tier A'])
-        else: df_comp['Tier'] = 'Non classé'
-    else: df_comp['Tier'] = "N/A"
+        if len(df_comp) >= 3: 
+            df_comp['Tier'] = pd.qcut(df_comp['GMV'].rank(method='first'), q=[0, 0.4, 0.8, 1.0], labels=['Tier C', 'Tier B', 'Tier A'])
+        else: 
+            df_comp['Tier'] = 'Non classé'
+    else: 
+        df_comp['Tier'] = "N/A"
     return df_comp
 
 df_current = df_merged[df_merged['Week'] == semaine_selectionnee].copy()
@@ -275,7 +318,7 @@ def get_metrics_with_zeroes(df_subset, expected_base):
 # --- MAPPING VILLE / ZONE ROBUSTE (CSV + FALLBACK RST_list POUR LES RESTOS A 0 COMMANDE) ---
 mapping_csv = df_merged_full[['Restaurant ID', 'Area', 'city']].dropna(subset=['Restaurant ID']).drop_duplicates('Restaurant ID')
 
-if not df_rst_master.empty and 'Main City' in df_rst_master.columns and 'Sub City' in df_rst_master.columns:
+if 'df_rst_master' in globals() and not df_rst_master.empty and 'Main City' in df_rst_master.columns and 'Sub City' in df_rst_master.columns:
     mapping_rst = df_rst_master[['Restaurant ID', 'Sub City', 'Main City']].rename(columns={'Sub City': 'Area', 'Main City': 'city'}).dropna(subset=['Restaurant ID'])
     mapping_area = pd.concat([mapping_csv, mapping_rst], ignore_index=True).drop_duplicates('Restaurant ID', keep='first')
 else:
