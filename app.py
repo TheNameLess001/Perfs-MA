@@ -472,8 +472,8 @@ with tabs[1]:
 
     st.markdown("#### 📈 Tops & Flops")
     col_t, col_f = st.columns(2)
-    with col_t: st.success("🏆 **Top 10 Accélérations**"); st.dataframe(resto_comp.sort_values('wow delivered', ascending=False).head(30)[['Restaurant Name', 'Tier', 'wow delivered %']].style.format({'wow delivered %': '{:+.1%}'}), hide_index=True)
-    with col_f: st.error("📉 **Flop 10 Chutes**"); st.dataframe(resto_comp.sort_values('wow delivered', ascending=True).head(30)[['Restaurant Name', 'Tier', 'wow delivered %']].style.format({'wow delivered %': '{:+.1%}'}), hide_index=True)
+    with col_t: st.success("🏆 **Top 30 Accélérations**"); st.dataframe(resto_comp.sort_values('wow delivered', ascending=False).head(30)[['Restaurant Name', 'Tier', 'wow delivered %']].style.format({'wow delivered %': '{:+.1%}'}), hide_index=True)
+    with col_f: st.error("📉 **Flop 30 Chutes**"); st.dataframe(resto_comp.sort_values('wow delivered', ascending=True).head(30)[['Restaurant Name', 'Tier', 'wow delivered %']].style.format({'wow delivered %': '{:+.1%}'}), hide_index=True)
 
 # ----------------------------------------
 # ONGLET 3 : ANNULATIONS
