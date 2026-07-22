@@ -128,13 +128,14 @@ try:
         df_merged_full = load_all_drive_csvs(fichiers_disponibles)
         
         if am_choisi != "Global":
+            # Si un AM est sélectionné (ex: Houda), on filtre sur sa pipeline
             df_pipe_am = df_pipeline_master[df_pipeline_master['AM_Name'].str.lower() == am_choisi.lower()]
-            liste_attendue = df_pipe_am[['Restaurant ID', 'Restaurant Name']].drop_duplicates()
+            liste_attendue = df_pipe_am[['Restaurant ID', 'Restaurant Name']].drop_duplicates(subset=['Restaurant ID'])
             df_merged = df_merged_full[df_merged_full['Restaurant ID'].isin(liste_attendue['Restaurant ID'])].copy()
         else:
-            liste_data = df_merged_full[['Restaurant ID', 'Restaurant Name']].dropna().drop_duplicates(subset=['Restaurant ID'])
-            liste_attendue = pd.concat([df_pipeline_master[['Restaurant ID', 'Restaurant Name']], liste_data]).drop_duplicates(subset=['Restaurant ID'])
+            # 💡 MODE GLOBAL : Direct et sans chichi, TOUS les restaurants de la data !
             df_merged = df_merged_full.copy()
+            liste_attendue = df_merged[['Restaurant ID', 'Restaurant Name']].dropna(subset=['Restaurant ID']).drop_duplicates(subset=['Restaurant ID'])
 
         pattern_exclus = '|'.join(['test', 'restau fixe', 'restau avance'])
         df_merged = df_merged[~df_merged['Restaurant Name'].astype(str).str.contains(pattern_exclus, case=False, na=False)]
