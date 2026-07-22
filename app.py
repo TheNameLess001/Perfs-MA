@@ -76,7 +76,6 @@ def load_crm_data():
         ws_pipe = sheet.worksheet("Pipelines")
         ws_notes = sheet.worksheet("Notes_Historique")
         
-        # Protection si le sheet est totalement vide (création des colonnes si besoin)
         pipe_records = ws_pipe.get_all_records()
         if not pipe_records: df_pipe = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name', 'AM_Name'])
         else: df_pipe = pd.DataFrame(pipe_records)
@@ -135,7 +134,7 @@ try:
 
         if am_choisi != "Global":
             df_pipe_am = df_pipeline_master[df_pipeline_master['AM_Name'].str.lower() == am_choisi.lower()]
-            if 'Restaurant Name' in df_data.columns: df_data.drop(columns=['Restaurant Name'], inplace=True)
+            if 'Restaurant Name' in df_data.columns and 'Restaurant Name' in df_pipeline.columns: df_data.drop(columns=['Restaurant Name'], inplace=True)
             df_merged = pd.merge(df_data, df_pipe_am[['Restaurant ID', 'Restaurant Name']], on="Restaurant ID", how="inner")
             liste_attendue = df_pipe_am[['Restaurant ID', 'Restaurant Name']].drop_duplicates()
         else:
@@ -147,7 +146,6 @@ try:
         df_merged = df_merged[~df_merged['Restaurant Name'].str.contains(pattern_exclus, case=False, na=False)]
         liste_attendue = liste_attendue[~liste_attendue['Restaurant Name'].str.contains(pattern_exclus, case=False, na=False)]
 
-        # Annexes (Lecture classique sur GitHub, ou modifiez pour Drive plus tard)
         try: df_caisse = pd.read_csv("CaisseMA.csv", sep=None, engine='python')
         except: df_caisse = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name'])
         
@@ -190,7 +188,6 @@ def compute_metrics(df_subset, group_cols):
 def compare_wow(df_curr, df_prev, merge_on):
     df_comp = pd.merge(df_curr, df_prev, on=merge_on, suffixes=('', '_prev'), how='left').fillna(0)
     
-    # Protection Division Zéro
     req_curr_safe, req_prev_safe = df_comp['Requested'].replace(0, np.nan), df_comp['Requested_prev'].replace(0, np.nan)
     del_curr_safe, del_prev_safe = df_comp['Delivered'].replace(0, np.nan), df_comp['Delivered_prev'].replace(0, np.nan)
     gmv_prev_safe = df_comp['GMV_prev'].replace(0, np.nan)
@@ -250,7 +247,6 @@ def popup_restaurant(resto_id, resto_name):
         if st.button("💾 Enregistrer la note"):
             ws_notes = crm_sheet.worksheet("Notes_Historique")
             date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-            # Ajout manuel des en-têtes si vide, pour la sécurité
             if df_notes_master.empty: ws_notes.append_row(['Date', 'Restaurant ID', 'Auteur', 'Contenu'])
             ws_notes.append_row([date_str, int(resto_id), st.session_state.user, nouvelle_note])
             st.success("Note enregistrée ! Fermez le popup pour actualiser.")
@@ -290,10 +286,38 @@ def popup_restaurant(resto_id, resto_name):
                 ws_pipe.append_row([int(resto_id), resto_name, nouveau_am])
             st.success(f"Transféré à {nouveau_am} ! Fermez le popup.")
 
+
 # ==========================================
-# 6. ONGLETS ET AFFICHAGES VISUELS (LES 9 ONGLETS)
+# 6. CORRECTION DE LA FONCTION MERGE_EXT
 # ==========================================
-tabs = st.tabs(["🌍 1. Macro", "📈 2. Overview", "❌ 3. Annulations", "🤖 4. Auto", "💻 5. Caisse.ma", "✨ 6. New", "👻 7. Inactifs", "🏆 8. Héros", "🍕 9. Catégories"])
+def merge_external_list(df_external, expected_list, comp_df):
+    """Permet d'afficher TOUS les restaurants d'une liste sans erreur de Catégorie (Tier)"""
+    res = pd.merge(pd.merge(df_external[['Restaurant ID']], expected_list[['Restaurant ID', 'Restaurant Name']], on='Restaurant ID', how='inner'), comp_df.drop(columns=['Restaurant Name'], errors='ignore'), on='Restaurant ID', how='left')
+    
+    # Remplacement par 0 uniquement pour les colonnes numériques
+    metrics_num = ['Requested', 'Delivered', 'GMV', 'wow GMV', 'wow GMV %', 'Success Rate', 'Taux Acceptation', 'wow delivered %']
+    for m in metrics_num:
+        if m in res.columns:
+            res[m] = res[m].fillna(0)
+            
+    # Traitement sécurisé de la colonne Catégorique "Tier"
+    if 'Tier' in res.columns:
+        res['Tier'] = res['Tier'].astype(str).replace('nan', 'Non classé')
+        
+    if 'Area' in res.columns: 
+        res['Area'] = res['Area'].fillna('Aucune Cmd')
+        
+    return res
+
+
+# ==========================================
+# 7. ONGLETS ET AFFICHAGES VISUELS (LES 9 ONGLETS)
+# ==========================================
+tabs = st.tabs([
+    "🌍 1. Macro", "📈 2. Overview", "❌ 3. Annulations", 
+    "🤖 4. Auto", "💻 5. Caisse.ma", "✨ 6. New", 
+    "👻 7. Inactifs", "🏆 8. Héros", "🍕 9. Catégories"
+])
 
 # -- ONGLET 1 --
 with tabs[0]:
@@ -335,19 +359,19 @@ with tabs[3]:
         auto_recap['Type'] = auto_recap['Is_Auto'].map({True: '🤖 Automatisé', False: '👨‍💻 Manuel'})
         st.dataframe(auto_recap[['Type', 'Req', 'Del']], hide_index=True)
 
-# Helper pour Caisse/New
-def merge_ext(df_ext, exp_list, comp):
-    return pd.merge(pd.merge(df_ext[['Restaurant ID']], exp_list, on='Restaurant ID'), comp.drop(columns=['Restaurant Name'], errors='ignore'), on='Restaurant ID', how='left').fillna(0)
-
 # -- ONGLET 5 --
 with tabs[4]:
     st.markdown("#### 💻 Caisse.ma")
-    if not df_caisse.empty: st.dataframe(merge_ext(df_caisse, liste_attendue, resto_comp)[['Restaurant Name', 'Requested', 'GMV']], hide_index=True)
+    if not df_caisse.empty:
+        df_caisse_comp = merge_external_list(df_caisse, liste_attendue, resto_comp)
+        if not df_caisse_comp.empty: st.dataframe(df_caisse_comp[['Restaurant Name', 'Requested', 'GMV']], hide_index=True)
 
 # -- ONGLET 6 --
 with tabs[5]:
     st.markdown("#### ✨ New Restaurants")
-    if not df_new.empty: st.dataframe(merge_ext(df_new, liste_attendue, resto_comp)[['Restaurant Name', 'Requested', 'GMV']], hide_index=True)
+    if not df_new.empty:
+        df_new_comp = merge_external_list(df_new, liste_attendue, resto_comp)
+        if not df_new_comp.empty: st.dataframe(df_new_comp[['Restaurant Name', 'Requested', 'GMV']], hide_index=True)
 
 # -- ONGLET 7 --
 with tabs[6]:
