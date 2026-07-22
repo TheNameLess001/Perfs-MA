@@ -239,6 +239,12 @@ def popup_360(entity_type, entity_id, entity_name):
     elif entity_type == 'Week':
         df_r = df_merged.sort_values('order day')
         note_id = f"Week_{entity_id}"
+    elif entity_type == 'City':
+        df_r = df_merged[df_merged['city'].astype(str) == str(entity_id)].sort_values('order day')
+        note_id = f"City_{entity_id}"
+    elif entity_type == 'Area':
+        df_r = df_merged[df_merged['Area'].astype(str) == str(entity_id)].sort_values('order day')
+        note_id = f"Area_{entity_id}"
 
     st.markdown(f"### {'🏪' if entity_type == 'Restaurant' else '📊'} {entity_name}")
     
