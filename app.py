@@ -349,10 +349,10 @@ def popup_360(entity_type, entity_id, entity_name):
         c_t, c_f = st.columns(2)
         with c_t:
             st.success("🏆 Top 10 Accélérations")
-            st.dataframe(comp_w.sort_values('wow GMV', ascending=False).head(10)[['Restaurant Name', 'wow Req', 'wow Req %']].style.format({'wow Req': '{:,.0f}', 'wow Req %': '{:+.1%}'}), hide_index=True)
+            st.dataframe(comp_w.sort_values('wow Req', ascending=False).head(10)[['Restaurant Name', 'wow Req', 'wow Req %']].style.format({'wow Req': '{:,.0f}', 'wow Req %': '{:+.1%}'}), hide_index=True)
         with c_f:
             st.error("📉 Flop 10 Chutes")
-            st.dataframe(comp_w.sort_values('wow GMV', ascending=True).head(10)[['Restaurant Name', 'wow Req', 'wow Req %']].style.format({'wow Req': '{:,.0f}', 'wow Req %': '{:+.1%}'}), hide_index=True)
+            st.dataframe(comp_w.sort_values('wow Req', ascending=True).head(10)[['Restaurant Name', 'wow Req', 'wow Req %']].style.format({'wow Req': '{:,.0f}', 'wow Req %': '{:+.1%}'}), hide_index=True)
 
     if not c_df.empty or not p_df.empty:
         df_trend = c_df.groupby('order day').agg(Req=('order id','count'), Deliv=('status', lambda x: (x=='Delivered').sum())).reset_index()
