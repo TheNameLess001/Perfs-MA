@@ -27,24 +27,27 @@ vue_globale = st.radio("Portée de l'analyse :", ["🇲🇦 Global Maroc", "🎯
 col_am, col_upload = st.columns([1, 2])
 with col_am:
     if vue_globale == "🎯 Par Account Manager (Pipeline)":
-        am_choisi = st.selectbox("Sélectionnez la Pipeline", ["Houda", "Chaima", "Imane", "Najwa"], label_visibility="collapsed")
+        am_choisi = st.selectbox("Sélectionnez la Pipeline", ["Houda", "Yassine", "Sara", "Amine"], label_visibility="collapsed")
     else:
         am_choisi = "Global"
 
 with col_upload:
-    fichier_data = st.file_uploader("📂 Uploadez l'export Data (admin-earnings...csv)", type=["csv", "xlsx"], label_visibility="collapsed")
+    st.info("🔄 **Automatisation activée** : Lecture automatique du fichier `Data_Yassir.csv` depuis GitHub.")
 
 st.markdown("---")
-if fichier_data is None:
-    st.info("👋 Bienvenue ! Veuillez uploader le fichier Data de la semaine pour générer la Control Tower.")
-    st.stop()
 
 # ==========================================
 # 3. MOTEUR DE DONNÉES ET LECTURE FICHIERS
 # ==========================================
 try:
-    with st.spinner('Traitement des données en cours...'):
-        df_data = pd.read_csv(fichier_data)
+    with st.spinner('Chargement et traitement des données en cours...'):
+        
+        # LECTURE AUTOMATIQUE DEPUIS GITHUB
+        try:
+            df_data = pd.read_csv("Data_Yassir.csv")
+        except FileNotFoundError:
+            st.error("❌ Le fichier `Data_Yassir.csv` est introuvable sur votre GitHub. Veuillez l'uploader pour afficher le tableau de bord.")
+            st.stop()
         
         # Standardisation
         if "restaurant name" in df_data.columns:
@@ -342,7 +345,6 @@ with tabs[3]:
 # ONGLET 5 ET 6 : HELPER FONCTION POUR VUE EXHAUSTIVE (0 COMMANDES)
 # ----------------------------------------
 def merge_external_list(df_external, expected_list, comp_df):
-    """Permet de forcer l'affichage de TOUS les restaurants d'une liste (ex: Caisse ou New), même ceux à 0 commande"""
     valid_list = pd.merge(df_external[['Restaurant ID']], expected_list[['Restaurant ID', 'Restaurant Name']], on='Restaurant ID', how='inner')
     res = pd.merge(valid_list, comp_df.drop(columns=['Restaurant Name'], errors='ignore'), on='Restaurant ID', how='left')
     
