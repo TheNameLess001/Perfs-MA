@@ -27,7 +27,7 @@ vue_globale = st.radio("Portée de l'analyse :", ["🇲🇦 Global Maroc", "🎯
 col_am, col_upload = st.columns([1, 2])
 with col_am:
     if vue_globale == "🎯 Par Account Manager (Pipeline)":
-        am_choisi = st.selectbox("Sélectionnez la Pipeline", ["Houda", "Yassine", "Sara", "Amine"], label_visibility="collapsed")
+        am_choisi = st.selectbox("Sélectionnez la Pipeline", ["Houda", "Chaima", "Imane", "Najwa"], label_visibility="collapsed")
     else:
         am_choisi = "Global"
 
