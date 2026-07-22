@@ -447,7 +447,8 @@ with tabs[0]:
         st.plotly_chart(px.line(df_daily, x="order day", y="GMV", title="Tendance GMV", markers=True), use_container_width=True, key="macro_gmv_chart")
     with col_g2: 
         st.plotly_chart(px.line(df_daily, x="order day", y="Requested", title="Tendance Commandes Reçues", markers=True, color_discrete_sequence=['#f39c12']), use_container_width=True, key="macro_req_chart")
-st.markdown("---")
+
+    st.markdown("---")
     city_curr, city_prev = compute_metrics(df_current, ['city']), compute_metrics(df_prev, ['city'])
     city_comp = compare_wow(city_curr, city_prev, ['city'])
     area_curr, area_prev = compute_metrics(df_current, ['city', 'Area']), compute_metrics(df_prev, ['city', 'Area'])
