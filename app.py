@@ -385,11 +385,47 @@ def popup_360(entity_type, entity_id, entity_name):
     with b8: st.markdown(f"<div class='purple-box'><h3>Temps Livraison</h3><h2>{v_del}</h2><p>{label_evo}: {format_evo(c_dt, p_dt) if v_del != 'N/A' else '-'}</p></div>", unsafe_allow_html=True)
     with b9: st.markdown(f"<div class='purple-box'><h3>Analyse Active</h3><h2>{label_evo}</h2><p>Période sélectionnée</p></div>", unsafe_allow_html=True)
 
-    if entity_type in ['Week', 'City', 'Area']:
+   # --- 5.5. RÉPARTITION PAR PIPELINE (POUR VILLE, AREA, CATÉGORIE) ---
+    if entity_type in ['City', 'Area', 'Category']:
+        st.markdown(f"#### 👥 Impact par Pipeline ({entity_name})")
+        # On fusionne avec la base des pipelines pour récupérer le nom de l'AM
+        df_am_impact = pd.merge(c_df, df_pipeline_master[['Restaurant ID', 'AM_Name']], on='Restaurant ID', how='left')
+        df_am_impact['AM_Name'] = df_am_impact['AM_Name'].fillna('Non Assigné / Global')
+        
+        # On calcule les perfs par AM pour l'entité sélectionnée
+        am_metrics = compute_metrics(df_am_impact, ['AM_Name']).sort_values('Requested', ascending=False)
+        am_metrics['Success Rate'] = (am_metrics['Delivered'] / am_metrics['Requested'].replace(0, np.nan)).fillna(0)
+        
+        # On calcule la part de chaque AM (en % des requêtes totales de l'entité)
+        total_req = am_metrics['Requested'].sum()
+        am_metrics['Part (%)'] = (am_metrics['Requested'] / total_req).fillna(0)
+        
+        # Affichage propre
+        st.dataframe(
+            am_metrics[['AM_Name', 'Requested', 'Part (%)', 'Delivered', 'Success Rate', 'GMV']].style.format({
+                'Part (%)': '{:.1%}', 
+                'Success Rate': '{:.1%}', 
+                'GMV': '{:,.0f}'
+            }), 
+            hide_index=True, 
+            use_container_width=True
+        )
+        st.markdown("---")
+
+    # --- 6. TOP/FLOP 10 SEMAINE / VILLE / ZONE / CATEGORY ---
+    if entity_type in ['Week', 'City', 'Area', 'Category']:
         st.markdown(f"#### 📈 Tops & Flops ({entity_name}) - Volume de Commandes")
         resto_curr = compute_metrics(c_df, ['Restaurant ID', 'Restaurant Name'])
         resto_prev = compute_metrics(p_df, ['Restaurant ID', 'Restaurant Name'])
         comp_w = compare_wow(resto_curr, resto_prev, ['Restaurant ID', 'Restaurant Name'])
+        
+        c_t, c_f = st.columns(2)
+        with c_t:
+            st.success("🏆 Top 10 Accélérations")
+            st.dataframe(comp_w.sort_values('wow Req', ascending=False).head(10)[['Restaurant Name', 'wow Req', 'wow Req %']].style.format({'wow Req': '{:+,.0f}', 'wow Req %': '{:+.1%}'}), hide_index=True)
+        with c_f:
+            st.error("📉 Flop 10 Chutes")
+            st.dataframe(comp_w.sort_values('wow Req', ascending=True).head(10)[['Restaurant Name', 'wow Req', 'wow Req %']].style.format({'wow Req': '{:+,.0f}', 'wow Req %': '{:+.1%}'}), hide_index=True)
         
         c_t, c_f = st.columns(2)
         with c_t:
