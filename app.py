@@ -446,7 +446,9 @@ with tabs[4]:
         df_c_comp = merge_ext(df_caisse, resto_comp)
         if not df_c_comp.empty: 
             ev_c = st.dataframe(df_c_comp[['Restaurant ID', 'Restaurant Name', 'Requested', 'GMV', 'wow GMV %', 'Success Rate']].style.format({'GMV': '{:,.0f}', 'wow GMV %': '{:+.1%}', 'Success Rate': '{:.1%}'}), column_config={"Restaurant ID": None}, hide_index=True, on_select="rerun", selection_mode="single-row")
-            if ev_c.selection.rows: popup_restaurant(df_c_comp.iloc[ev_c.selection.rows[0]]['Restaurant ID'], df_c_comp.iloc[ev_c.selection.rows[0]]['Restaurant Name'])
+            if ev_c.selection.rows: 
+                st.session_state.popup_resto_id = df_c_comp.iloc[ev_c.selection.rows[0]]['Restaurant ID']
+                st.session_state.popup_resto_name = df_c_comp.iloc[ev_c.selection.rows[0]]['Restaurant Name']
 
 with tabs[5]:
     st.markdown("#### ✨ New Restaurants (🖱️ Cliquable)")
@@ -454,7 +456,9 @@ with tabs[5]:
         df_n_comp = merge_ext(df_new, resto_comp)
         if not df_n_comp.empty: 
             ev_n = st.dataframe(df_n_comp[['Restaurant ID', 'Restaurant Name', 'Requested', 'GMV', 'Success Rate']].style.format({'GMV': '{:,.0f}', 'Success Rate': '{:.1%}'}), column_config={"Restaurant ID": None}, hide_index=True, on_select="rerun", selection_mode="single-row")
-            if ev_n.selection.rows: popup_restaurant(df_n_comp.iloc[ev_n.selection.rows[0]]['Restaurant ID'], df_n_comp.iloc[ev_n.selection.rows[0]]['Restaurant Name'])
+            if ev_n.selection.rows: 
+                st.session_state.popup_resto_id = df_n_comp.iloc[ev_n.selection.rows[0]]['Restaurant ID']
+                st.session_state.popup_resto_name = df_n_comp.iloc[ev_n.selection.rows[0]]['Restaurant Name']
 
 with tabs[6]:
     st.markdown("#### 👻 Inactifs")
@@ -501,3 +505,12 @@ with tabs[8]:
         with c_c2: st.plotly_chart(px.bar(df_cat_disp.sort_values('GMV', ascending=False).head(10), x='Food Category', y='GMV'))
         
         st.dataframe(df_cat_disp[['Food Category', 'Requested', 'Delivered', 'Success Rate', 'GMV', 'AOV']].style.format({'Success Rate': '{:.1%}', 'GMV': '{:,.0f}', 'AOV': '{:,.0f}'}), hide_index=True, use_container_width=True)
+
+# ==========================================
+# GESTION SÉCURISÉE DU POPUP (Fin du fichier)
+# ==========================================
+if st.session_state.get("popup_resto_id") is not None:
+    popup_restaurant(st.session_state.popup_resto_id, st.session_state.popup_resto_name)
+    # On efface la mémoire pour éviter que le popup ne s'ouvre en boucle
+    st.session_state.popup_resto_id = None
+    st.session_state.popup_resto_name = None
