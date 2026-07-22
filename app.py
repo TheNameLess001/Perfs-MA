@@ -362,7 +362,7 @@ def popup_360(entity_type, entity_id, entity_name):
     if not c_df.empty or not p_df.empty:
         df_trend = c_df.groupby('order day').agg(Req=('order id','count'), Deliv=('status', lambda x: (x=='Delivered').sum())).reset_index()
         if not df_trend.empty:
-            st.plotly_chart(px.line(df_trend, x='order day', y=['Req', 'Deliv'], title="Tendance Journalière (Période ciblée)", markers=True), use_container_width=True)
+            st.plotly_chart(px.line(df_trend, x='order day', y=['Req', 'Deliv'], title="Tendance Journalière (Période ciblée)", markers=True), use_container_width=True, key=f"chart_popup_{note_id}")
     
     st.markdown("---")
     
@@ -456,8 +456,8 @@ with tabs[0]:
     st.markdown("---")
     df_daily = compute_metrics(df_merged, ['order day']).sort_values('order day')
     col_g1, col_g2 = st.columns(2)
-    with col_g1: st.plotly_chart(px.line(df_daily, x="order day", y="GMV", title="Tendance GMV", markers=True), use_container_width=True)
-    with col_g2: st.plotly_chart(px.line(df_daily, x="order day", y="Requested", title="Tendance Commandes Reçues", markers=True, color_discrete_sequence=['#f39c12']), use_container_width=True)
+with col_g1: st.plotly_chart(px.line(df_daily, x="order day", y="GMV", title="Tendance GMV", markers=True), use_container_width=True, key="macro_gmv_chart")
+with col_g2: st.plotly_chart(px.line(df_daily, x="order day", y="Requested", title="Tendance Commandes Reçues", markers=True, color_discrete_sequence=['#f39c12']), use_container_width=True, key="macro_req_chart")
 
 # ----------------------------------------
 # ONGLET 2 : OVERVIEW PIPELINE
