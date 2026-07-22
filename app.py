@@ -224,45 +224,119 @@ df_prev_full = get_metrics_with_zeroes(df_prev, liste_base_overview)
 # ==========================================
 # 5. POPUP 360° (CRM RESTAURANT DYNAMIQUE)
 # ==========================================
+# ==========================================
+# 5. POPUP 360° (CRM RESTAURANT DYNAMIQUE)
+# ==========================================
 @st.dialog("🔍 Vue 360° du Restaurant", width="large")
 def popup_restaurant(resto_id, resto_name):
     df_r = df_merged[df_merged['Restaurant ID'].astype(str) == str(resto_id)].sort_values('order day')
     
     st.markdown(f"### 🏪 {resto_name}")
-    choix_periode = st.radio("Filtre d'analyse du popup :", ["WoW (Semaine Active)", "MoM (30 Derniers Jours)", "Historique Complet"], horizontal=True)
+    
+    # --- LIGNE D'EN-TÊTE : FILTRE ET BOUTON REPORT ---
+    col_filtre, col_btn = st.columns([2, 1])
+    with col_filtre:
+        choix_periode = st.radio("Filtre d'analyse du popup :", ["WoW (Semaine Active)", "MoM (30 Derniers Jours)", "Historique Complet"], horizontal=True)
+    
+    # Paramétrage des périodes de comparaison
+    max_d = df_r['order day'].max()
+    if pd.isna(max_d): max_d = datetime.now()
     
     if choix_periode == "WoW (Semaine Active)":
         c_df = df_r[df_r['Week'] == semaine_selectionnee]
         p_df = df_r[df_r['Week'] == semaine_precedente] if semaine_precedente else pd.DataFrame(columns=df_r.columns)
         label_evo = "WoW"
     elif choix_periode == "MoM (30 Derniers Jours)":
-        max_d = df_merged['order day'].max()
-        if pd.isna(max_d): max_d = datetime.now()
         c_df = df_r[df_r['order day'] >= max_d - timedelta(days=30)]
         p_df = df_r[(df_r['order day'] >= max_d - timedelta(days=60)) & (df_r['order day'] < max_d - timedelta(days=30))]
         label_evo = "MoM"
     else:
         c_df = df_r
         p_df = pd.DataFrame(columns=df_r.columns)
-        label_evo = "Historique Global"
+        label_evo = "Global"
+
+    # --- MOTEUR DE CALCUL DES KPIs DU POPUP ---
+    def calc_kpis(df):
+        req = len(df)
+        df_deliv = df[df['status'] == 'Delivered']
+        deliv = len(df_deliv)
+        gmv = df_deliv['item total'].sum() if 'item total' in df.columns else 0
+        aov = (gmv / deliv) if deliv > 0 else 0
+        p_admin = df_deliv['coupon admin'].sum() if 'coupon admin' in df.columns else 0
+        p_resto = df_deliv['coupon restaurant'].sum() if 'coupon restaurant' in df.columns else 0
+        sr = (deliv / req) if req > 0 else 0
         
-    req_tot = len(c_df)
-    deliv_tot = len(c_df[c_df['status'] == 'Delivered'])
-    gmv_tot = c_df[c_df['status'] == 'Delivered']['item total'].sum()
-    gmv_prev = p_df[p_df['status'] == 'Delivered']['item total'].sum()
-    evo = (gmv_tot / gmv_prev - 1) if gmv_prev > 0 else 0
+        # Temps (sécurisés au cas où la colonne est vide ou absente)
+        t_prep = df_deliv['preparation time'].mean() if 'preparation time' in df.columns else (df_deliv['prep time'].mean() if 'prep time' in df.columns else 0)
+        t_deliv = df_deliv['delivery time'].mean() if 'delivery time' in df.columns else 0
+        
+        return req, deliv, gmv, aov, p_admin, p_resto, sr, t_prep, t_deliv
+
+    c_req, c_del, c_gmv, c_aov, c_pa, c_pr, c_sr, c_prep, c_dt = calc_kpis(c_df)
+    p_req, p_del, p_gmv, p_aov, p_pa, p_pr, p_sr, p_prep, p_dt = calc_kpis(p_df)
+
+    def format_evo(curr, prev):
+        if prev == 0 and curr > 0: return "+100%"
+        if prev == 0 and curr == 0: return "-"
+        return f"{(curr / prev) - 1:+.1%}"
+
+    # --- BOUTON DE GÉNÉRATION DU RAPPORT PARTENAIRE ---
+    with col_btn:
+        report_text = f"📊 RAPPORT DE PERFORMANCES - YASSIR\n"
+        report_text += f"Partenaire : {resto_name}\n"
+        report_text += f"Période : {choix_periode}\n"
+        report_text += f"----------------------------------------\n"
+        report_text += f"📦 Commandes Reçues : {c_req} ({label_evo}: {format_evo(c_req, p_req)})\n"
+        report_text += f"✅ Commandes Livrées : {c_del} ({label_evo}: {format_evo(c_del, p_del)})\n"
+        report_text += f"🎯 Success Rate : {c_sr:.1%} ({label_evo}: {format_evo(c_sr, p_sr)})\n"
+        report_text += f"💰 Chiffre d'affaires généré (GMV) : {c_gmv:,.0f} MAD ({label_evo}: {format_evo(c_gmv, p_gmv)})\n"
+        report_text += f"🛒 Panier Moyen (AOV) : {c_aov:,.0f} MAD ({label_evo}: {format_evo(c_aov, p_aov)})\n"
+        report_text += f"🎁 Promos investies (Yassir / Resto) : {c_pa:,.0f} MAD / {c_pr:,.0f} MAD\n"
+        if pd.notnull(c_dt) and c_dt > 0: report_text += f"⏱️ Temps de Livraison Moyen : {c_dt:.0f} min\n"
+        report_text += f"----------------------------------------\n"
+        report_text += f"Généré automatiquement par Yassir Control Tower."
+        
+        st.download_button(
+            label="📥 Télécharger Présentation", 
+            data=report_text, 
+            file_name=f"Performances_{resto_name}.txt", 
+            mime="text/plain", 
+            use_container_width=True
+        )
+
+    st.markdown("---")
+
+    # --- AFFICHAGE DES 9 BOXES VIOLETTES ---
+    # Ligne 1 : Les Volumes
+    b1, b2, b3 = st.columns(3)
+    with b1: st.markdown(f"<div class='purple-box'><h3>Commandes Reçues</h3><h2>{c_req}</h2><p>{label_evo}: {format_evo(c_req, p_req)}</p></div>", unsafe_allow_html=True)
+    with b2: st.markdown(f"<div class='purple-box'><h3>Commandes Livrées</h3><h2>{c_del}</h2><p>{label_evo}: {format_evo(c_del, p_del)}</p></div>", unsafe_allow_html=True)
+    with b3: st.markdown(f"<div class='purple-box'><h3>Success Rate</h3><h2>{c_sr:.1%}</h2><p>{label_evo}: {format_evo(c_sr, p_sr)}</p></div>", unsafe_allow_html=True)
     
-    c1, c2, c3 = st.columns(3)
-    with c1: st.markdown(f"<div class='purple-box'><h3>Commandes Reçues</h3><h2>{req_tot}</h2></div>", unsafe_allow_html=True)
-    with c2: st.markdown(f"<div class='purple-box'><h3>Commandes Livrées</h3><h2>{deliv_tot}</h2></div>", unsafe_allow_html=True)
-    with c3: st.markdown(f"<div class='purple-box'><h3>GMV Généré</h3><h2>{gmv_tot:,.0f} MAD</h2><p>Evolution {label_evo}: {evo:+.1%}</p></div>", unsafe_allow_html=True)
+    # Ligne 2 : La Finance
+    b4, b5, b6 = st.columns(3)
+    with b4: st.markdown(f"<div class='purple-box'><h3>GMV Généré</h3><h2>{c_gmv:,.0f} MAD</h2><p>{label_evo}: {format_evo(c_gmv, p_gmv)}</p></div>", unsafe_allow_html=True)
+    with b5: st.markdown(f"<div class='purple-box'><h3>Panier Moyen (AOV)</h3><h2>{c_aov:,.0f} MAD</h2><p>{label_evo}: {format_evo(c_aov, p_aov)}</p></div>", unsafe_allow_html=True)
+    with b6: st.markdown(f"<div class='purple-box'><h3>Promos (Yassir / Resto)</h3><h2>{c_pa:,.0f} / {c_pr:,.0f}</h2><p>{label_evo}: {format_evo(c_pa, p_pa)} / {format_evo(c_pr, p_pr)}</p></div>", unsafe_allow_html=True)
+
+    # Ligne 3 : L'Opérationnel
+    b7, b8, b9 = st.columns(3)
+    v_prep = f"{c_prep:.0f} min" if pd.notnull(c_prep) and c_prep > 0 else "N/A"
+    v_del = f"{c_dt:.0f} min" if pd.notnull(c_dt) and c_dt > 0 else "N/A"
     
+    with b7: st.markdown(f"<div class='purple-box'><h3>Temps Préparation</h3><h2>{v_prep}</h2><p>{label_evo}: {format_evo(c_prep, p_prep) if v_prep != 'N/A' else '-'}</p></div>", unsafe_allow_html=True)
+    with b8: st.markdown(f"<div class='purple-box'><h3>Temps Livraison</h3><h2>{v_del}</h2><p>{label_evo}: {format_evo(c_dt, p_dt) if v_del != 'N/A' else '-'}</p></div>", unsafe_allow_html=True)
+    with b9: st.markdown(f"<div class='purple-box'><h3>Analyse Active</h3><h2>{label_evo}</h2><p>Période sélectionnée</p></div>", unsafe_allow_html=True)
+
+    # --- GRAPHIQUE ---
     if not df_r.empty:
         df_trend = df_r.groupby('order day').agg(Req=('order id','count'), Deliv=('status', lambda x: (x=='Delivered').sum())).reset_index()
-        fig = px.line(df_trend, x='order day', y=['Req', 'Deliv'], title="Tendance Journalière", markers=True)
+        fig = px.line(df_trend, x='order day', y=['Req', 'Deliv'], title="Tendance Journalière de la période globale", markers=True)
         st.plotly_chart(fig, use_container_width=True)
     
     st.markdown("---")
+    
+    # --- ACTIONS, NOTES ET TRANSFERT ---
     col_act, col_trans = st.columns(2)
     
     with col_act:
@@ -290,7 +364,7 @@ def popup_restaurant(resto_id, resto_name):
                         g_av = avant[avant['status'] == 'Delivered']['item total'].sum()
                         g_ap = apres[apres['status'] == 'Delivered']['item total'].sum()
                         e_ap = (g_ap / g_av - 1) if g_av > 0 else 0
-                        st.info(f"📊 Impact ({jours}j) : GMV Avant = {g_av:,.0f} | GMV Après = {g_ap:,.0f} ({e_ap:+.1%})")
+                        st.info(f"📊 Impact ({jours}j) : GMV Avant = {g_av:,.0f} MAD | GMV Après = {g_ap:,.0f} MAD ({e_ap:+.1%})")
                     except: pass
         else:
             st.info("Aucune note pour ce restaurant.")
@@ -301,6 +375,7 @@ def popup_restaurant(resto_id, resto_name):
         current_am = pipe_am['AM_Name'].iloc[0] if not pipe_am.empty else "Global / Inconnu"
         st.write(f"Pipeline actuelle : **{current_am}**")
         nouveau_am = st.selectbox("Transférer vers :", ["Houda", "Chaima", "Najwa", "Imane"], key=f"t_{resto_id}")
+        
         if st.button("🚀 Valider le transfert", key=f"bt_t_{resto_id}"):
             ws_pipe = crm_sheet.worksheet("Pipelines")
             try:
@@ -308,7 +383,7 @@ def popup_restaurant(resto_id, resto_name):
                 ws_pipe.update_cell(cell.row, 3, nouveau_am)
             except:
                 ws_pipe.append_row([str(resto_id), resto_name, nouveau_am])
-            st.success(f"Transféré à {nouveau_am} !")
+            st.success(f"Transféré à {nouveau_am} ! Fermez le popup pour actualiser.")
 
 # ==========================================
 # 6. ONGLETS ET AFFICHAGES VISUELS
