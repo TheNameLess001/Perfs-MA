@@ -407,6 +407,14 @@ def popup_360(entity_type, entity_id, entity_name):
 # ==========================================
 tabs = st.tabs(["🌍 1. Macro", "📈 2. Overview", "❌ 3. Annulations", "🤖 4. Auto", "💻 5. Caisse.ma", "✨ 6. New", "👻 7. Inactifs", "🏆 8. Héros", "🍕 9. Catégories"])
 
+# --- DÉTECTEUR DE CLIC FRAIS ---
+def is_new_selection(key, selection_rows):
+    prev_key = f"prev_sel_{key}"
+    prev = st.session_state.get(prev_key, [])
+    curr = selection_rows if selection_rows else []
+    st.session_state[prev_key] = curr
+    return curr != prev and len(curr) > 0
+    
 # ----------------------------------------
 # ONGLET 1 : ANALYSE GLOBAL (MACRO)
 # ----------------------------------------
@@ -433,7 +441,7 @@ with tabs[0]:
     disp_macro = df_macro_display[['Période', 'Reçu', 'Livré', 'GMV', 'CA', 'AOV', 'V. Reçu', 'V. Livré', 'V. GMV', 'V. CA', 'V. AOV']]
     ev_macro = st.dataframe(disp_macro, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row", key="macro_table_select")
     
-    if ev_macro.selection.rows:
+    if is_new_selection("macro_table_select", ev_macro.selection.rows):
         idx = ev_macro.selection.rows[0]
         if "Week" in str(disp_macro.iloc[idx]['Période']):
             st.session_state.popup_entity_type = 'Week'
@@ -475,7 +483,7 @@ with tabs[1]:
     for c in ['GMV']: df_disp[c] = df_disp[c].apply(lambda x: f"{x:,.0f}")
 
     event = st.dataframe(df_disp, column_config={"Restaurant ID": None}, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row", key="overview_table_select")
-    if event.selection.rows:
+    if is_new_selection("overview_table_select", event.selection.rows):
         st.session_state.popup_entity_type = 'Restaurant'
         st.session_state.popup_entity_id = df_disp.iloc[event.selection.rows[0]]['Restaurant ID']
         st.session_state.popup_entity_name = df_disp.iloc[event.selection.rows[0]]['Restaurant Name']
@@ -550,7 +558,7 @@ with tabs[4]:
         if not df_c_comp.empty: 
             disp_caisse = df_c_comp[['Restaurant ID', 'Restaurant Name', 'Requested', 'GMV', 'wow GMV %', 'Success Rate']].copy()
             ev_c = st.dataframe(disp_caisse.style.format({'GMV': '{:,.0f}', 'wow GMV %': '{:+.1%}', 'Success Rate': '{:.1%}'}), column_config={"Restaurant ID": None}, hide_index=True, use_container_width=True, on_select="rerun", selection_mode="single-row", key="caisse_table_select")
-            if ev_c.selection.rows:
+            if is_new_selection("caisse_table_select", ev_c.selection.rows):
                 st.session_state.popup_entity_type = 'Restaurant'
                 st.session_state.popup_entity_id = disp_caisse.iloc[ev_c.selection.rows[0]]['Restaurant ID']
                 st.session_state.popup_entity_name = disp_caisse.iloc[ev_c.selection.rows[0]]['Restaurant Name']
@@ -562,7 +570,7 @@ with tabs[5]:
         if not df_n_comp.empty: 
             disp_new = df_n_comp[['Restaurant ID', 'Restaurant Name', 'Requested', 'GMV', 'Success Rate']].copy()
             ev_n = st.dataframe(disp_new.style.format({'GMV': '{:,.0f}', 'Success Rate': '{:.1%}'}), column_config={"Restaurant ID": None}, hide_index=True, use_container_width=True, on_select="rerun", selection_mode="single-row", key="new_table_select")
-            if ev_n.selection.rows:
+            if is_new_selection("new_table_select", ev_n.selection.rows):
                 st.session_state.popup_entity_type = 'Restaurant'
                 st.session_state.popup_entity_id = disp_new.iloc[ev_n.selection.rows[0]]['Restaurant ID']
                 st.session_state.popup_entity_name = disp_new.iloc[ev_n.selection.rows[0]]['Restaurant Name']
@@ -591,7 +599,7 @@ with tabs[7]:
         c_p1, c_p2 = st.columns([1, 2])
         with c_p1: 
             ev_p = st.dataframe(top_items.head(15), hide_index=True, on_select="rerun", selection_mode="single-row", key="heros_table_select")
-            if ev_p.selection.rows:
+            if is_new_selection("heros_table_select", ev_p.selection.rows):
                 st.session_state.popup_entity_type = 'Item'
                 st.session_state.popup_entity_id = top_items.iloc[ev_p.selection.rows[0]]['Produit']
                 st.session_state.popup_entity_name = top_items.iloc[ev_p.selection.rows[0]]['Produit']
@@ -641,7 +649,7 @@ with tabs[8]:
             selection_mode="single-row",
             key="cat_table_select"
         )
-        if ev_cat.selection.rows:
+        if is_new_selection("cat_table_select", ev_cat.selection.rows):
             st.session_state.popup_entity_type = 'Category'
             st.session_state.popup_entity_id = disp_cat.iloc[ev_cat.selection.rows[0]]['Food Category']
             st.session_state.popup_entity_name = disp_cat.iloc[ev_cat.selection.rows[0]]['Food Category']
