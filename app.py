@@ -3,6 +3,11 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 from datetime import timedelta
+import re
+import io
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
 
 # ==========================================
 # 1. CONFIGURATION DE LA PAGE
@@ -15,11 +20,57 @@ st.set_page_config(
 )
 
 st.title("📊 Control Tower Yassir")
-st.markdown("Outil de pilotage stratégique et d'analyse des performances hebdomadaires.")
+st.markdown("Outil de pilotage stratégique connecté en temps réel à Google Drive.")
 st.markdown("---")
 
 # ==========================================
-# 2. EN-TÊTE ET CONTRÔLES (PANNEAU DE BORD)
+# 2. CONNEXION À GOOGLE DRIVE (LE ROBOT)
+# ==========================================
+@st.cache_resource
+def get_drive_service():
+    try:
+        creds_dict = st.secrets["gcp_service_account"]
+        creds = service_account.Credentials.from_service_account_info(
+            creds_dict, scopes=['https://www.googleapis.com/auth/drive.readonly']
+        )
+        return build('drive', 'v3', credentials=creds)
+    except Exception as e:
+        st.error("❌ Erreur de connexion au compte de service. Vérifiez vos Secrets Streamlit.")
+        st.stop()
+
+service = get_drive_service()
+
+# --- Recherche des fichiers Data Yassir ---
+@st.cache_data(ttl=300) # Rafraîchit la liste toutes les 5 minutes
+def get_data_files():
+    results = service.files().list(
+        q="mimeType='text/csv'", # On ne cherche que les CSV
+        fields="files(id, name)"
+    ).execute()
+    
+    items = results.get('files', [])
+    data_files = []
+    
+    # Filtre "data week X_YYYY.csv"
+    for f in items:
+        match = re.search(r'data week (\d+)_(\d{4})\.csv', f['name'], re.IGNORECASE)
+        if match:
+            week = int(match.group(1))
+            year = int(match.group(2))
+            data_files.append({'id': f['id'], 'name': f['name'], 'year': year, 'week': week})
+            
+    # Tri du plus récent au plus ancien (Année puis Semaine)
+    data_files.sort(key=lambda x: (x['year'], x['week']), reverse=True)
+    return data_files
+
+fichiers_disponibles = get_data_files()
+
+if not fichiers_disponibles:
+    st.warning("⚠️ Aucun fichier au format `data week X_YYYY.csv` n'a été trouvé. Avez-vous partagé le dossier Google Drive avec le robot ?")
+    st.stop()
+
+# ==========================================
+# 3. EN-TÊTE ET CONTRÔLES (PANNEAU DE BORD)
 # ==========================================
 st.markdown("### ⚙️ Configuration & Données")
 vue_globale = st.radio("Portée de l'analyse :", ["🇲🇦 Global Maroc", "🎯 Par Account Manager (Pipeline)"], horizontal=True)
@@ -32,28 +83,37 @@ with col_am:
         am_choisi = "Global"
 
 with col_upload:
-    st.info("🔄 **Automatisation activée** : Lecture automatique du fichier `Data_Yassir.csv` depuis GitHub.")
+    # Menu déroulant généré automatiquement depuis Drive
+    noms_fichiers = [f['name'] for f in fichiers_disponibles]
+    fichier_choisi = st.selectbox("📂 Fichier de données (Google Drive) :", noms_fichiers, label_visibility="collapsed")
 
 st.markdown("---")
 
 # ==========================================
-# 3. MOTEUR DE DONNÉES ET LECTURE FICHIERS
+# 4. MOTEUR DE LECTURE (TÉLÉCHARGEMENT DRIVE)
 # ==========================================
+@st.cache_data(show_spinner=False)
+def load_drive_csv(file_id):
+    request = service.files().get_media(fileId=file_id)
+    fh = io.BytesIO()
+    downloader = MediaIoBaseDownload(fh, request)
+    done = False
+    while done is False:
+        status, done = downloader.next_chunk()
+    fh.seek(0)
+    return pd.read_csv(fh)
+
 try:
-    with st.spinner('Chargement et traitement des données en cours...'):
-        
-        # LECTURE AUTOMATIQUE DEPUIS GITHUB
-        try:
-            df_data = pd.read_csv("Data_Yassir.csv")
-        except FileNotFoundError:
-            st.error("❌ Le fichier `Data_Yassir.csv` est introuvable sur votre GitHub. Veuillez l'uploader pour afficher le tableau de bord.")
-            st.stop()
+    with st.spinner(f'Téléchargement et traitement de {fichier_choisi}...'):
+        # On trouve l'ID du fichier choisi par l'utilisateur
+        id_choisi = next(f['id'] for f in fichiers_disponibles if f['name'] == fichier_choisi)
+        df_data = load_drive_csv(id_choisi)
         
         # Standardisation
         if "restaurant name" in df_data.columns:
             df_data.rename(columns={"restaurant name": "Restaurant Name"}, inplace=True)
 
-        # Logique de fusion Global vs Pipeline
+        # Logique de fusion Global vs Pipeline (lus localement sur GitHub)
         if vue_globale == "🎯 Par Account Manager (Pipeline)":
             df_pipeline = pd.read_csv(f"Pipeline - {am_choisi}.csv", sep=None, engine='python')
             if 'Restaurant Name' in df_data.columns and 'Restaurant Name' in df_pipeline.columns:
@@ -66,25 +126,20 @@ try:
             df_merged['Segment'] = 'Global'
             liste_attendue = df_merged[['Restaurant ID', 'Restaurant Name']].drop_duplicates()
 
-        # -----------------------------------------------------
-        # 🚨 EXCLUSION GLOBALE DES RESTAURANTS TEST / FIXES
-        # -----------------------------------------------------
+        # EXCLUSION GLOBALE DES RESTAURANTS TEST / FIXES
         mots_exclus = ['test', 'restau fixe', 'restau avance']
         pattern_exclus = '|'.join(mots_exclus)
-        
-        # On nettoie la base de données des commandes
         df_merged = df_merged[~df_merged['Restaurant Name'].str.contains(pattern_exclus, case=False, na=False)]
-        # On nettoie la liste officielle du pipeline
         liste_attendue = liste_attendue[~liste_attendue['Restaurant Name'].str.contains(pattern_exclus, case=False, na=False)]
 
-        # Lecture sécurisée des fichiers annexes (Caisse et Nouveaux)
+        # Fichiers annexes (sur GitHub)
         try: df_caisse = pd.read_csv("CaisseMA.csv", sep=None, engine='python')
         except: df_caisse = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name'])
         
         try: df_new = pd.read_csv("NewRestaurants.csv", sep=None, engine='python')
         except: df_new = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name'])
 
-        # Gestion des dates et calendriers
+        # Gestion des dates et semaines
         df_merged['order day'] = pd.to_datetime(df_merged['order day'])
         df_merged['Week'] = "Week " + df_merged['order day'].dt.isocalendar().week.astype(str).str.zfill(2)
         semaines_dispos = sorted(df_merged['Week'].unique(), reverse=True)
@@ -107,7 +162,7 @@ with st.sidebar:
     st.info(f"**Commandes chargées :** {len(df_merged):,}")
 
 # ==========================================
-# 4. MOTEUR DE CALCULS & CROISSANCE (WoW)
+# 5. MOTEUR DE CALCULS & CROISSANCE (WoW)
 # ==========================================
 def compute_metrics(df_subset, group_cols):
     return df_subset.groupby(group_cols).agg(
@@ -126,23 +181,18 @@ def compute_metrics(df_subset, group_cols):
 def compare_wow(df_curr, df_prev, merge_on):
     df_comp = pd.merge(df_curr, df_prev, on=merge_on, suffixes=('', '_prev'), how='left').fillna(0)
     
-    # Calcul des Taux Actuels
     df_comp['Success Rate'] = (df_comp['Delivered'] / df_comp['Requested']).fillna(0)
     df_comp['Taux Acceptation'] = (df_comp['Auto_Accepted'] / df_comp['Requested']).fillna(0)
     df_comp['Taux Cancellation'] = (df_comp['CancelledByRestaurant'] / df_comp['Requested']).fillna(0)
     df_comp['AOV'] = (df_comp['GMV'] / df_comp['Delivered']).fillna(0)
     
-    # Récupération des Taux Précédents
     ta_prev = (df_comp['Auto_Accepted_prev'] / df_comp['Requested_prev']).fillna(0)
     tc_prev = (df_comp['CancelledByRestaurant_prev'] / df_comp['Requested_prev']).fillna(0)
     
-    # Calcul des Évolutions (Wow)
     df_comp['wow delivered'] = df_comp['Delivered'] - df_comp['Delivered_prev']
     df_comp['wow delivered %'] = (df_comp['Delivered'] / df_comp['Delivered_prev'] - 1).replace([np.inf, -np.inf], 0).fillna(0)
-    
     df_comp['wow GMV'] = df_comp['GMV'] - df_comp['GMV_prev']
     df_comp['wow GMV %'] = (df_comp['GMV'] / df_comp['GMV_prev'] - 1).replace([np.inf, -np.inf], 0).fillna(0)
-    
     df_comp['wow T.A'] = df_comp['Taux Acceptation'] - ta_prev
     df_comp['wow Cancellation'] = df_comp['Taux Cancellation'] - tc_prev
     df_comp['Wow CA'] = df_comp['CA'] - df_comp['CA_prev']
@@ -150,7 +200,6 @@ def compare_wow(df_curr, df_prev, merge_on):
     df_comp['Wow Promo Order'] = (df_comp['Promo_Restaurant'] + df_comp['Promo_Admin']) - (df_comp['Promo_Restaurant_prev'] + df_comp['Promo_Admin_prev'])
     df_comp['Wow LR_LG_Costs'] = df_comp['LR_LG_Costs'] - df_comp['LR_LG_Costs_prev']
     
-    # Segmentation par Tier (A, B, C)
     if not df_comp.empty and 'GMV' in df_comp.columns:
         df_comp['Tier'] = pd.qcut(df_comp['GMV'].rank(method='first'), q=[0, 0.4, 0.8, 1.0], labels=['Tier C', 'Tier B', 'Tier A'])
     else:
@@ -158,12 +207,11 @@ def compare_wow(df_curr, df_prev, merge_on):
         
     return df_comp
 
-# Extraction des datasets des semaines cibles
 df_current = df_merged[df_merged['Week'] == semaine_selectionnee].copy()
 df_prev = df_merged[df_merged['Week'] == semaine_precedente] if semaine_precedente else pd.DataFrame(columns=df_merged.columns)
 
 # ==========================================
-# 5. ONGLETS ET AFFICHAGES VISUELS
+# 6. ONGLETS ET AFFICHAGES VISUELS (BASE 1)
 # ==========================================
 tabs = st.tabs([
     "🌍 1. Analyse Global", 
@@ -177,9 +225,8 @@ tabs = st.tabs([
     "🍕 9. Catégories Food"
 ])
 
-# ----------------------------------------
-# ONGLET 1 : ANALYSE GLOBAL (MACRO)
-# ----------------------------------------
+# --- Les 9 onglets restent strictement identiques à la Base 1 ---
+
 with tabs[0]:
     st.markdown("#### 🌍 Analyse Macro des Performances")
     vue_temporelle = st.radio("Sélectionnez la vue globale :", ["📅 Jour", "📊 Week over Week (WoW)"], horizontal=True)
@@ -240,9 +287,6 @@ with tabs[0]:
             disp_area = area_comp[['Area', 'Requested', 'wow delivered %', 'GMV', 'wow GMV', 'Success Rate', 'wow T.A']].sort_values('Requested', ascending=False).head(15).copy()
             st.dataframe(disp_area.style.format({'wow delivered %': '{:+.1%}', 'GMV': '{:,.0f}', 'wow GMV': '{:+,.0f}', 'Success Rate': '{:.1%}', 'wow T.A': '{:+.1%}'}), hide_index=True)
 
-# ----------------------------------------
-# ONGLET 2 : OVERVIEW PIPELINE & TOPS/FLOPS
-# ----------------------------------------
 with tabs[1]:
     st.markdown("#### 📋 Base de Données Détaillée & Anomalies")
     resto_curr, resto_prev = compute_metrics(df_current, ['Area', 'Restaurant ID', 'Restaurant Name']), compute_metrics(df_prev, ['Area', 'Restaurant ID', 'Restaurant Name'])
@@ -279,9 +323,6 @@ with tabs[1]:
         st.error("📉 **Flop 10 Chutes**")
         st.dataframe(resto_comp.sort_values('wow delivered', ascending=True).head(10)[['Restaurant Name', 'Tier', 'wow delivered', 'wow delivered %']].style.format({'wow delivered %': '{:+.1%}'}), hide_index=True)
 
-# ----------------------------------------
-# ONGLET 3 : ANNULATIONS
-# ----------------------------------------
 with tabs[2]:
     st.markdown("#### ❌ Surveillance des Annulations")
     df_canc_curr = df_current[df_current['status'].str.contains('Cancelled', case=False, na=False)]
@@ -311,9 +352,6 @@ with tabs[2]:
     pires = resto_canc[resto_canc['Requested'] > 5].sort_values('Taux Cancellation', ascending=False).head(15)
     st.dataframe(pires.style.format({'Taux Cancellation': '{:.1%}', 'wow Cancellation': '{:+.1%}'}), use_container_width=True, hide_index=True)
 
-# ----------------------------------------
-# ONGLET 4 : AUTOMATION
-# ----------------------------------------
 with tabs[3]:
     st.markdown("#### 🤖 Suivi de l'Automatisation (Accepted By)")
     if 'Accepted By' in df_current.columns:
@@ -341,29 +379,21 @@ with tabs[3]:
         df_reg = resto_comp[resto_comp['wow T.A'] < 0].sort_values('wow T.A', ascending=True).head(10)
         st.dataframe(df_reg[cols_to_show].style.format({'Taux Acceptation': '{:.1%}', 'wow T.A': '{:+.1%}'}), hide_index=True, use_container_width=True)
 
-# ----------------------------------------
-# ONGLET 5 ET 6 : HELPER FONCTION POUR VUE EXHAUSTIVE (0 COMMANDES)
-# ----------------------------------------
 def merge_external_list(df_external, expected_list, comp_df):
     valid_list = pd.merge(df_external[['Restaurant ID']], expected_list[['Restaurant ID', 'Restaurant Name']], on='Restaurant ID', how='inner')
     res = pd.merge(valid_list, comp_df.drop(columns=['Restaurant Name'], errors='ignore'), on='Restaurant ID', how='left')
-    
     metrics_num = ['Requested', 'Delivered', 'GMV', 'wow GMV', 'wow GMV %', 'Success Rate', 'Taux Acceptation', 'wow delivered %']
     for m in metrics_num:
         if m in res.columns: res[m] = res[m].fillna(0)
     if 'Area' in res.columns: res['Area'] = res['Area'].fillna('Aucune Cmd')
     return res
 
-# ----------------------------------------
-# ONGLET 5 : CAISSE.MA
-# ----------------------------------------
 with tabs[4]:
     st.markdown("#### 💻 Intégration Caisse.ma")
     if df_caisse.empty:
-        st.warning("⚠️ Fichier `CaisseMA.csv` introuvable. Uploadez-le à la racine du projet.")
+        st.warning("⚠️ Fichier `CaisseMA.csv` introuvable. Uploadez-le à la racine du projet GitHub.")
     else:
         df_caisse_comp = merge_external_list(df_caisse, liste_attendue, resto_comp)
-        
         if df_caisse_comp.empty:
             st.info("Aucun restaurant de cette vue n'est équipé de Caisse.ma.")
         else:
@@ -372,16 +402,12 @@ with tabs[4]:
                 'wow delivered %': '{:+.1%}', 'GMV': '{:,.0f}', 'wow GMV %': '{:+.1%}', 'Taux Acceptation': '{:.1%}', 'Success Rate': '{:.1%}'
             }), hide_index=True, use_container_width=True)
 
-# ----------------------------------------
-# ONGLET 6 : NEW RESTAURANTS
-# ----------------------------------------
 with tabs[5]:
     st.markdown("#### ✨ Performances Nouveaux Restaurants")
     if df_new.empty:
-        st.warning("⚠️ Fichier `NewRestaurants.csv` introuvable. Uploadez-le à la racine du projet.")
+        st.warning("⚠️ Fichier `NewRestaurants.csv` introuvable. Uploadez-le à la racine du projet GitHub.")
     else:
         df_new_comp = merge_external_list(df_new, liste_attendue, resto_comp)
-        
         if df_new_comp.empty:
             st.info("Aucun nouveau restaurant dans ce périmètre.")
         else:
@@ -390,9 +416,6 @@ with tabs[5]:
                 'Success Rate': '{:.1%}', 'Taux Acceptation': '{:.1%}', 'GMV': '{:,.0f}', 'wow GMV': '{:+,.0f}'
             }), hide_index=True, use_container_width=True)
 
-# ----------------------------------------
-# ONGLET 7 : INACTIFS
-# ----------------------------------------
 with tabs[6]:
     st.markdown("#### 👻 Surveillance des Inactifs (Aucune Commande)")
     jours_inactifs = st.radio("Signaler les restaurants inactifs depuis :", [3, 7, 15, 30], format_func=lambda x: f"{x} Jours", horizontal=True)
@@ -409,9 +432,6 @@ with tabs[6]:
         st.error(f"⚠️ **{len(restos_inactifs)} restaurants** de votre config n'ont reçu aucune commande depuis {jours_inactifs} jours !")
         st.dataframe(restos_inactifs[['Restaurant Name']], hide_index=True, use_container_width=True)
 
-# ----------------------------------------
-# ONGLET 8 : PRODUITS HÉROS
-# ----------------------------------------
 with tabs[7]:
     st.markdown(f"#### 🏆 Produits Héros - Les Meilleures Ventes ({semaine_selectionnee})")
     if 'Food Item' in df_current.columns:
@@ -443,9 +463,6 @@ with tabs[7]:
     else:
         st.warning("⚠️ La colonne 'Food Item' est introuvable.")
 
-# ----------------------------------------
-# ONGLET 9 : CATÉGORIES FOOD
-# ----------------------------------------
 with tabs[8]:
     st.markdown(f"#### 🍕 Performances des Catégories de Food ({semaine_selectionnee})")
     if 'Food Category' in df_current.columns:
