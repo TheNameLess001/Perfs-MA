@@ -191,6 +191,11 @@ def compare_wow(df_curr, df_prev, merge_on):
     df_comp['Taux Acceptation'] = (df_comp['Auto_Accepted'] / req_curr_safe).fillna(0)
     df_comp['Taux Cancellation'] = (df_comp['CancelledByRestaurant'] / req_curr_safe).fillna(0)
     df_comp['AOV'] = (df_comp['GMV'] / del_curr_safe).fillna(0)
+    
+    # NOUVEAU : Calculs WoW sur les Requests (Commandes Reçues)
+    df_comp['wow Req'] = df_comp['Requested'] - df_comp['Requested_prev']
+    df_comp['wow Req %'] = (df_comp['Requested'] / req_prev_safe - 1).fillna(0)
+    
     df_comp['wow delivered'] = df_comp['Delivered'] - df_comp['Delivered_prev']
     df_comp['wow delivered %'] = (df_comp['Delivered'] / del_prev_safe - 1).fillna(0)
     df_comp['wow GMV'] = df_comp['GMV'] - df_comp['GMV_prev']
