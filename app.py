@@ -224,9 +224,6 @@ df_prev_full = get_metrics_with_zeroes(df_prev, liste_base_overview)
 # ==========================================
 # 5. POPUP 360° (CRM RESTAURANT DYNAMIQUE)
 # ==========================================
-# ==========================================
-# 5. POPUP 360° (CRM RESTAURANT DYNAMIQUE)
-# ==========================================
 @st.dialog("🔍 Vue 360° du Restaurant", width="large")
 def popup_restaurant(resto_id, resto_name):
     df_r = df_merged[df_merged['Restaurant ID'].astype(str) == str(resto_id)].sort_values('order day')
@@ -266,20 +263,17 @@ def popup_restaurant(resto_id, resto_name):
         p_resto = df_deliv['coupon restaurant'].sum() if 'coupon restaurant' in df_deliv.columns else 0
         sr = (deliv / req) if req > 0 else 0
         
-        # --- CORRECTION DES TEMPS ---
-        # 1. Temps de Livraison (Recherche de 'delivery time(M)')
+        # Temps (sécurisés au cas où la colonne est vide ou absente)
         t_deliv = 0
         if 'delivery time(M)' in df_deliv.columns:
             t_deliv = df_deliv['delivery time(M)'].mean()
         elif 'delivery time' in df_deliv.columns:
             t_deliv = df_deliv['delivery time'].mean()
             
-        # 2. Temps de Préparation (Calculé dynamiquement)
         t_prep = 0
         if 'preparation time' in df_deliv.columns:
             t_prep = df_deliv['preparation time'].mean()
         elif 'Ready by Restaurant' in df_deliv.columns and 'Accepted at' in df_deliv.columns:
-            # On calcule la différence entre l'heure où le resto a accepté et l'heure où le plat était prêt
             try:
                 accepted = pd.to_datetime(df_deliv['Accepted at'].astype(str).str.replace(' /', ''), format='mixed', errors='coerce')
                 ready = pd.to_datetime(df_deliv['Ready by Restaurant'].astype(str).str.replace(' /', ''), format='mixed', errors='coerce')
@@ -289,6 +283,15 @@ def popup_restaurant(resto_id, resto_name):
                 t_prep = 0
                 
         return req, deliv, gmv, aov, p_admin, p_resto, sr, t_prep, t_deliv
+
+    # ---> LES LIGNES QUI AVAIENT DISPARU SONT ICI <---
+    c_req, c_del, c_gmv, c_aov, c_pa, c_pr, c_sr, c_prep, c_dt = calc_kpis(c_df)
+    p_req, p_del, p_gmv, p_aov, p_pa, p_pr, p_sr, p_prep, p_dt = calc_kpis(p_df)
+
+    def format_evo(curr, prev):
+        if prev == 0 and curr > 0: return "+100%"
+        if prev == 0 and curr == 0: return "-"
+        return f"{(curr / prev) - 1:+.1%}"
 
     # --- BOUTON DE GÉNÉRATION DU RAPPORT PARTENAIRE ---
     with col_btn:
