@@ -637,7 +637,7 @@ with tabs[2]:
         if not df_canc_curr.empty:
             reasons = df_canc_curr['cancellation reason '].value_counts().reset_index()
             reasons.columns = ['Motif', 'Nombre']
-            st.plotly_chart(px.pie(reasons, names='Motif', values='Nombre', hole=0.4), use_container_width=True)
+            st.plotly_chart(px.pie(reasons, names='Motif', values='Nombre', hole=0.4), use_container_width=True, key="canc_pie_chart")
 
     st.markdown("#### 🚨 Les Récidivistes")
     pires = resto_comp[resto_comp['Requested'] > 5].sort_values('Taux Cancellation', ascending=False).head(15)
