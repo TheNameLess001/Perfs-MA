@@ -2,6 +2,6 @@ streamlit
 pandas
 numpy
 plotly
-openpyxl
 google-api-python-client
 google-auth
+gspread
