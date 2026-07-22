@@ -97,6 +97,11 @@ if not fichiers_disponibles:
 # 3. MOTEUR DE FUSION TOTALE DES FICHIERS & REFERENTIEL
 # ==========================================
 
+def clean_id_series(s):
+    if s is None or len(s) == 0:
+        return s
+    return s.astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+
 # --- CHARGEMENT DU SHEET CENTRAL RST_list ---
 @st.cache_data(ttl=600)
 def load_rst_list_gsheets():
@@ -105,9 +110,13 @@ def load_rst_list_gsheets():
         records = sheet_rst.sheet1.get_all_records()
         df_rst = pd.DataFrame(records)
         if not df_rst.empty and 'Restaurant ID' in df_rst.columns:
-            df_rst['Restaurant ID'] = df_rst['Restaurant ID'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+            df_rst['Restaurant ID'] = clean_id_series(df_rst['Restaurant ID'])
             if 'Restaurant Name' not in df_rst.columns and 'restaurant name' in df_rst.columns:
                 df_rst.rename(columns={'restaurant name': 'Restaurant Name'}, inplace=True)
+            if 'Main City' in df_rst.columns:
+                df_rst['Main City'] = df_rst['Main City'].astype(str).str.strip()
+            if 'Sub City' in df_rst.columns:
+                df_rst['Sub City'] = df_rst['Sub City'].astype(str).str.strip()
         return df_rst
     except Exception:
         return pd.DataFrame()
@@ -145,28 +154,31 @@ try:
     with st.spinner("Aspiration et fusion de tout l'historique en cours..."):
         df_merged_full = load_all_drive_csvs(fichiers_disponibles)
         
-        # --- NETTOYAGE HARMONISÉ DES IDs (Format Texte pur sans .0) ---
+        # --- NETTOYAGE HARMONISÉ DE TOUTES LES SOURCES ---
         if not df_pipeline_master.empty and 'Restaurant ID' in df_pipeline_master.columns:
-            df_pipeline_master['Restaurant ID'] = df_pipeline_master['Restaurant ID'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+            df_pipeline_master['Restaurant ID'] = clean_id_series(df_pipeline_master['Restaurant ID'])
 
         if not df_merged_full.empty and 'Restaurant ID' in df_merged_full.columns:
-            df_merged_full['Restaurant ID'] = df_merged_full['Restaurant ID'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+            df_merged_full['Restaurant ID'] = clean_id_series(df_merged_full['Restaurant ID'])
             df_merged_full = df_merged_full[df_merged_full['Restaurant ID'] != 'nan']
 
-        if am_choisi != "Global":
-            # Filtrage strict sur la pipeline d'un AM spécifique
-            df_pipe_am = df_pipeline_master[df_pipeline_master['AM_Name'].astype(str).str.lower() == am_choisi.lower()]
-            liste_attendue = df_pipe_am[['Restaurant ID', 'Restaurant Name']].dropna(subset=['Restaurant ID']).drop_duplicates(subset=['Restaurant ID'])
-            df_merged = df_merged_full[df_merged_full['Restaurant ID'].isin(liste_attendue['Restaurant ID'])].copy()
-        else:
-            # 💡 MODE GLOBAL : Fusion intégrale CRM + CSV + RST_list (Zéro restaurant perdu !)
-            cols = ['Restaurant ID', 'Restaurant Name']
-            
-            l_csv = df_merged_full[cols].dropna(subset=['Restaurant ID']) if not df_merged_full.empty else pd.DataFrame(columns=cols)
-            l_crm = df_pipeline_master[cols].dropna(subset=['Restaurant ID']) if not df_pipeline_master.empty else pd.DataFrame(columns=cols)
-            l_rst = df_rst_master[cols].dropna(subset=['Restaurant ID']) if (not df_rst_master.empty and all(c in df_rst_master.columns for c in cols)) else pd.DataFrame(columns=cols)
+        # Consolidation intégrale des noms (Priorité : RST_list > CRM > CSV)
+        cols_id_name = ['Restaurant ID', 'Restaurant Name']
+        l_rst = df_rst_master[cols_id_name].dropna(subset=['Restaurant ID']) if (not df_rst_master.empty and all(c in df_rst_master.columns for c in cols_id_name)) else pd.DataFrame(columns=cols_id_name)
+        l_crm = df_pipeline_master[cols_id_name].dropna(subset=['Restaurant ID']) if not df_pipeline_master.empty else pd.DataFrame(columns=cols_id_name)
+        l_csv = df_merged_full[cols_id_name].dropna(subset=['Restaurant ID']) if not df_merged_full.empty else pd.DataFrame(columns=cols_id_name)
 
-            liste_attendue = pd.concat([l_csv, l_crm, l_rst], ignore_index=True).drop_duplicates(subset=['Restaurant ID'])
+        master_restos = pd.concat([l_rst, l_crm, l_csv], ignore_index=True).drop_duplicates(subset=['Restaurant ID'], keep='first')
+
+        if am_choisi != "Global":
+            # Filtrage strict sur la pipeline d'un AM
+            df_pipe_am = df_pipeline_master[df_pipeline_master['AM_Name'].astype(str).str.lower() == am_choisi.lower()]
+            am_ids = df_pipe_am['Restaurant ID'].unique()
+            liste_attendue = master_restos[master_restos['Restaurant ID'].isin(am_ids)].copy()
+            df_merged = df_merged_full[df_merged_full['Restaurant ID'].isin(am_ids)].copy()
+        else:
+            # 💡 MODE GLOBAL : 100% DES RESTAURANTS DE TOUTES LES SOURCES !
+            liste_attendue = master_restos.copy()
             df_merged = df_merged_full.copy()
 
         # Exclusion des restaurants de test
@@ -174,24 +186,26 @@ try:
         df_merged = df_merged[~df_merged['Restaurant Name'].astype(str).str.contains(pattern_exclus, case=False, na=False)]
         liste_attendue = liste_attendue[~liste_attendue['Restaurant Name'].astype(str).str.contains(pattern_exclus, case=False, na=False)]
 
-        # Chargement & nettoyage des IDs pour CaisseMA et NewRestaurants
         try: 
             df_caisse = pd.read_csv("CaisseMA.csv", sep=None, engine='python')
             if 'Restaurant ID' in df_caisse.columns:
-                df_caisse['Restaurant ID'] = df_caisse['Restaurant ID'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+                df_caisse['Restaurant ID'] = clean_id_series(df_caisse['Restaurant ID'])
         except: 
             df_caisse = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name'])
             
         try: 
             df_new = pd.read_csv("NewRestaurants.csv", sep=None, engine='python')
             if 'Restaurant ID' in df_new.columns:
-                df_new['Restaurant ID'] = df_new['Restaurant ID'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+                df_new['Restaurant ID'] = clean_id_series(df_new['Restaurant ID'])
         except: 
             df_new = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name'])
 
+        df_merged_full['order day'] = pd.to_datetime(df_merged_full['order day'])
+        df_merged_full['Week'] = "Week " + df_merged_full['order day'].dt.isocalendar().week.astype(str).str.zfill(2)
+
         df_merged['order day'] = pd.to_datetime(df_merged['order day'])
         df_merged['Week'] = "Week " + df_merged['order day'].dt.isocalendar().week.astype(str).str.zfill(2)
-        semaines_dispos = sorted(df_merged['Week'].unique(), reverse=True)
+        semaines_dispos = sorted(df_merged_full['Week'].unique(), reverse=True)
 
 except Exception as e:
     st.error(f"❌ Erreur critique lors de la fusion : {e}")
@@ -205,7 +219,7 @@ with st.sidebar:
     st.markdown("---")
     st.success(f"**Périmètre :** {am_choisi}")
     st.info(f"**Commandes totales (Historique) :** {len(df_merged):,}")
-    
+
 # ==========================================
 # 4. MOTEUR DE CALCULS & PROTECTION ZERO
 # ==========================================
@@ -258,8 +272,15 @@ def get_metrics_with_zeroes(df_subset, expected_base):
     res = pd.merge(expected_base, metrics, on='Restaurant ID', how='left').fillna(0)
     return res
 
-# --- MAPPING AREA SÉCURISÉ (Ne supprime plus les restos si ville/area est vide) ---
-mapping_area = df_merged[['Restaurant ID', 'Area', 'city']].dropna(subset=['Restaurant ID']).drop_duplicates('Restaurant ID')
+# --- MAPPING VILLE / ZONE ROBUSTE (CSV + FALLBACK RST_list POUR LES RESTOS A 0 COMMANDE) ---
+mapping_csv = df_merged_full[['Restaurant ID', 'Area', 'city']].dropna(subset=['Restaurant ID']).drop_duplicates('Restaurant ID')
+
+if not df_rst_master.empty and 'Main City' in df_rst_master.columns and 'Sub City' in df_rst_master.columns:
+    mapping_rst = df_rst_master[['Restaurant ID', 'Sub City', 'Main City']].rename(columns={'Sub City': 'Area', 'Main City': 'city'}).dropna(subset=['Restaurant ID'])
+    mapping_area = pd.concat([mapping_csv, mapping_rst], ignore_index=True).drop_duplicates('Restaurant ID', keep='first')
+else:
+    mapping_area = mapping_csv
+
 liste_base_overview = pd.merge(liste_attendue, mapping_area, on='Restaurant ID', how='left')
 liste_base_overview['Area'] = liste_base_overview['Area'].fillna('Aucune Cmd')
 liste_base_overview['city'] = liste_base_overview['city'].fillna('Inconnu')
@@ -268,41 +289,40 @@ df_current_full = get_metrics_with_zeroes(df_current, liste_base_overview)
 df_prev_full = get_metrics_with_zeroes(df_prev, liste_base_overview)
 
 # ==========================================
-# 5. POPUP 360° UNIVERSEL (INTÉGRALEMENT NETTOYÉ & OPTIMISÉ)
+# 5. POPUP 360° UNIVERSEL (REQUÊTE SUR DATASET COMPLET)
 # ==========================================
 @st.dialog("🔍 Vue 360° Détaillée", width="large")
 def popup_360(entity_type, entity_id, entity_name):
-    # --- 0. FIX DATE MAX GLOBALE (RECALAGE DES COMPARAISONS) ---
-    max_global_date = df_merged['order day'].max()
+    max_global_date = df_merged_full['order day'].max()
     if pd.isna(max_global_date): 
         max_global_date = datetime.now()
     
     clean_entity_id = str(entity_id).strip().lower()
 
-    # --- 1. FILTRAGE PAR ENTITÉ ---
+    # --- FIX CLÉ : Le Popup interroge df_merged_full pour voir TOUS les AMs ---
     if entity_type == 'Restaurant':
-        df_r = df_merged[df_merged['Restaurant ID'].astype(str).str.strip().str.lower() == clean_entity_id].sort_values('order day')
+        df_r = df_merged_full[df_merged_full['Restaurant ID'].astype(str).str.strip().str.lower() == clean_entity_id].sort_values('order day')
         note_id = str(entity_id)
     elif entity_type == 'Category':
-        df_r = df_merged[df_merged['Food Category'].astype(str).str.replace(r'\[|\]|/', '', regex=True).str.strip().str.lower() == clean_entity_id].sort_values('order day')
+        df_r = df_merged_full[df_merged_full['Food Category'].astype(str).str.replace(r'\[|\]|/', '', regex=True).str.strip().str.lower() == clean_entity_id].sort_values('order day')
         note_id = f"Cat_{entity_id}"
     elif entity_type == 'Item':
-        df_r = df_merged[df_merged['Food Item'].astype(str).str.contains(str(entity_id), regex=False, na=False)].sort_values('order day')
+        df_r = df_merged_full[df_merged_full['Food Item'].astype(str).str.contains(str(entity_id), regex=False, na=False)].sort_values('order day')
         note_id = f"Item_{entity_id}"
     elif entity_type == 'Week':
-        df_r = df_merged.sort_values('order day')
+        df_r = df_merged_full.sort_values('order day')
         note_id = f"Week_{entity_id}"
     elif entity_type == 'City':
-        df_r = df_merged[df_merged['city'].astype(str).str.strip().str.lower() == clean_entity_id].sort_values('order day')
+        df_r = df_merged_full[df_merged_full['city'].astype(str).str.strip().str.lower() == clean_entity_id].sort_values('order day')
         note_id = f"City_{entity_id}"
     elif entity_type == 'Area':
-        df_r = df_merged[df_merged['Area'].astype(str).str.strip().str.lower() == clean_entity_id].sort_values('order day')
+        df_r = df_merged_full[df_merged_full['Area'].astype(str).str.strip().str.lower() == clean_entity_id].sort_values('order day')
         note_id = f"Area_{entity_id}"
 
     st.markdown(f"### {'🏪' if entity_type == 'Restaurant' else '📊'} {entity_name}")
     
-    # --- 2. CARTOUCHE D'INFO (POUR UN RESTAURANT) ---
-    if entity_type == 'Restaurant' and 'df_rst_master' in globals() and not df_rst_master.empty:
+    # --- CARTOUCHE D'INFO (RESTAURANT) ---
+    if entity_type == 'Restaurant' and not df_rst_master.empty:
         rst_info = df_rst_master[df_rst_master['Restaurant ID'].astype(str).str.lower() == clean_entity_id]
         if not rst_info.empty:
             info = rst_info.iloc[0]
@@ -323,13 +343,13 @@ def popup_360(entity_type, entity_id, entity_name):
                 f"🏪 **Type:** {c_type}"
             )
 
-    # --- 3. FILTRES TEMPORELS ---
+    # --- FILTRES TEMPORELS ---
     col_filtre, col_btn = st.columns([2, 1])
     if entity_type == 'Week':
         with col_filtre: 
             st.info(f"Analyse figée sur la {entity_name}")
         c_df = df_r[df_r['Week'] == entity_id]
-        weeks_list = sorted(df_merged['Week'].unique(), reverse=True)
+        weeks_list = sorted(df_merged_full['Week'].unique(), reverse=True)
         try: 
             p_week = weeks_list[weeks_list.index(entity_id) + 1]
         except: 
@@ -354,7 +374,7 @@ def popup_360(entity_type, entity_id, entity_name):
             p_df = pd.DataFrame(columns=df_r.columns)
             label_evo = "Global"
 
-    # --- 4. CALCUL DES KPIS GLOBAUX ---
+    # --- CALCUL DES KPIS GLOBAUX ---
     def calc_kpis(df):
         req = len(df)
         df_deliv = df[df['status'] == 'Delivered'].copy() if 'status' in df.columns else pd.DataFrame()
@@ -405,7 +425,7 @@ def popup_360(entity_type, entity_id, entity_name):
 
     st.markdown("---")
     
-    # --- 5. BOXES VIOLETTES ---
+    # --- BOXES VIOLETTES ---
     b1, b2, b3 = st.columns(3)
     with b1: st.markdown(f"<div class='purple-box'><h3>Commandes Reçues</h3><h2>{c_req}</h2><p>{label_evo}: {format_evo(c_req, p_req)}</p></div>", unsafe_allow_html=True)
     with b2: st.markdown(f"<div class='purple-box'><h3>Commandes Livrées</h3><h2>{c_del}</h2><p>{label_evo}: {format_evo(c_del, p_del)}</p></div>", unsafe_allow_html=True)
@@ -425,7 +445,7 @@ def popup_360(entity_type, entity_id, entity_name):
 
     st.markdown("---")
 
-    # --- 6. TABLEAU RÉCAPITULATIF : IMPACT PAR PIPELINE / AM ---
+    # --- TABLEAU D'IMPACT AM (PROJETÉ SUR L'ENSEMBLE DES AMs) ---
     if entity_type in ['City', 'Area', 'Category', 'Week']:
         st.markdown(f"#### 👥 Impact par Pipeline / AM ({entity_name})")
         
@@ -504,7 +524,7 @@ def popup_360(entity_type, entity_id, entity_name):
             
         st.markdown("---")
 
-    # --- 7. TOPS & FLOPS (AFFICHÉ UNE SEULE FOIS STRICTEMENT !) ---
+    # --- TOPS & FLOPS (AFFICHÉ UNE SEULE FOIS STRICTEMENT !) ---
     if entity_type in ['Week', 'City', 'Area', 'Category']:
         st.markdown(f"#### 📈 Tops & Flops ({entity_name}) - Volume de Commandes")
         resto_curr = compute_metrics(c_df, ['Restaurant ID', 'Restaurant Name'])
@@ -519,7 +539,7 @@ def popup_360(entity_type, entity_id, entity_name):
             st.error("📉 Flop 10 Chutes")
             st.dataframe(comp_w.sort_values('wow Req', ascending=True).head(10)[['Restaurant Name', 'wow Req', 'wow Req %']].style.format({'wow Req': '{:+,.0f}', 'wow Req %': '{:+.1%}'}), hide_index=True)
 
-    # --- 8. GRAPHIQUE JOURNALIER ---
+    # --- GRAPHIQUE JOURNALIER ---
     if not c_df.empty:
         df_trend = c_df.groupby('order day').agg(Req=('order id','count'), Deliv=('status', lambda x: (x=='Delivered').sum())).reset_index()
         if not df_trend.empty:
@@ -527,7 +547,7 @@ def popup_360(entity_type, entity_id, entity_name):
     
     st.markdown("---")
     
-    # --- 9. NOTES & TRANSFERS ---
+    # --- NOTES & TRANSFERTS ---
     col_act, col_trans = st.columns(2)
     with col_act:
         st.markdown(f"#### 📝 Ajouter une Note ({entity_name})")
@@ -547,7 +567,7 @@ def popup_360(entity_type, entity_id, entity_name):
                     jours = st.radio("Analyse post-action :", [7, 15, 30], format_func=lambda x: f"{x} Jours", horizontal=True, key=f"r_{idx_n}_{note_id}")
                     try:
                         d_note = pd.to_datetime(row['Date']).date()
-                        base_df = df_merged if entity_type == 'Week' else df_r
+                        base_df = df_merged_full if entity_type == 'Week' else df_r
                         base_df['date_only'] = base_df['order day'].dt.date
                         avant = base_df[(base_df['date_only'] < d_note) & (base_df['date_only'] >= d_note - timedelta(days=jours))]
                         apres = base_df[(base_df['date_only'] >= d_note) & (base_df['date_only'] <= d_note + timedelta(days=jours))]
@@ -575,7 +595,7 @@ def popup_360(entity_type, entity_id, entity_name):
                 except:
                     ws_pipe.append_row([str(entity_id), entity_name, nouveau_am])
                 st.success(f"Transféré à {nouveau_am} !")
-
+                
 # ==========================================
 # 6. ONGLETS ET AFFICHAGES VISUELS
 # ==========================================
