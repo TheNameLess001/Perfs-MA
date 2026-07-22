@@ -77,16 +77,14 @@ def load_crm_data():
         ws_notes = sheet.worksheet("Notes_Historique")
         
         pipe_records = ws_pipe.get_all_records()
-        if not pipe_records: df_pipe = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name', 'AM_Name'])
-        else: df_pipe = pd.DataFrame(pipe_records)
+        df_pipe = pd.DataFrame(pipe_records) if pipe_records else pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name', 'AM_Name'])
             
         notes_records = ws_notes.get_all_records()
-        if not notes_records: df_notes = pd.DataFrame(columns=['Date', 'Restaurant ID', 'Auteur', 'Contenu'])
-        else: df_notes = pd.DataFrame(notes_records)
+        df_notes = pd.DataFrame(notes_records) if notes_records else pd.DataFrame(columns=['Date', 'Restaurant ID', 'Auteur', 'Contenu'])
             
         return df_pipe, df_notes, sheet
     except Exception as e:
-        st.error(f"❌ Erreur lecture CRM_Yassir : {e}. Vérifiez que les onglets existent et ont bien leurs en-têtes (1ère ligne).")
+        st.error(f"❌ Erreur lecture CRM_Yassir : {e}. Vérifiez que les onglets existent.")
         st.stop()
 
 df_pipeline_master, df_notes_master, crm_sheet = load_crm_data()
@@ -134,7 +132,7 @@ try:
 
         if am_choisi != "Global":
             df_pipe_am = df_pipeline_master[df_pipeline_master['AM_Name'].str.lower() == am_choisi.lower()]
-            if 'Restaurant Name' in df_data.columns and 'Restaurant Name' in df_pipeline.columns: df_data.drop(columns=['Restaurant Name'], inplace=True)
+            if 'Restaurant Name' in df_data.columns and 'Restaurant Name' in df_pipe_am.columns: df_data.drop(columns=['Restaurant Name'], inplace=True)
             df_merged = pd.merge(df_data, df_pipe_am[['Restaurant ID', 'Restaurant Name']], on="Restaurant ID", how="inner")
             liste_attendue = df_pipe_am[['Restaurant ID', 'Restaurant Name']].drop_duplicates()
         else:
@@ -169,7 +167,7 @@ with st.sidebar:
     st.info(f"**Commandes chargées :** {len(df_merged):,}")
 
 # ==========================================
-# 4. MOTEUR DE CALCULS & CROISSANCE (WoW) - AVEC PROTECTION ZÉRO
+# 4. MOTEUR DE CALCULS & CROISSANCE (WoW)
 # ==========================================
 def compute_metrics(df_subset, group_cols):
     return df_subset.groupby(group_cols).agg(
@@ -178,32 +176,19 @@ def compute_metrics(df_subset, group_cols):
         Auto_Accepted=('Accepted By', lambda x: x.str.contains('restaurant', case=False, na=False).sum() if 'Accepted By' in df_subset.columns else 0),
         CancelledByRestaurant=('status', lambda x: x.str.contains('restaurant', case=False, na=False).sum()),
         GMV=('item total', lambda x: x[df_subset.loc[x.index, 'status'] == 'Delivered'].sum()),
-        CA=('admin earnings', lambda x: x[df_subset.loc[x.index, 'status'] == 'Delivered'].sum()),
-        Commission=('restaurant commission', lambda x: x[df_subset.loc[x.index, 'status'] == 'Delivered'].sum()),
-        Promo_Restaurant=('coupon restaurant', 'sum'),
-        Promo_Admin=('coupon admin', 'sum'),
-        LR_LG_Costs=('driver payout', 'sum')
     ).reset_index()
 
 def compare_wow(df_curr, df_prev, merge_on):
     df_comp = pd.merge(df_curr, df_prev, on=merge_on, suffixes=('', '_prev'), how='left').fillna(0)
-    
     req_curr_safe, req_prev_safe = df_comp['Requested'].replace(0, np.nan), df_comp['Requested_prev'].replace(0, np.nan)
     del_curr_safe, del_prev_safe = df_comp['Delivered'].replace(0, np.nan), df_comp['Delivered_prev'].replace(0, np.nan)
     gmv_prev_safe = df_comp['GMV_prev'].replace(0, np.nan)
     
     df_comp['Success Rate'] = (df_comp['Delivered'] / req_curr_safe).fillna(0)
     df_comp['Taux Acceptation'] = (df_comp['Auto_Accepted'] / req_curr_safe).fillna(0)
-    df_comp['Taux Cancellation'] = (df_comp['CancelledByRestaurant'] / req_curr_safe).fillna(0)
-    df_comp['AOV'] = (df_comp['GMV'] / del_curr_safe).fillna(0)
-    
-    df_comp['wow delivered'] = df_comp['Delivered'] - df_comp['Delivered_prev']
     df_comp['wow delivered %'] = (df_comp['Delivered'] / del_prev_safe - 1).fillna(0)
-    df_comp['wow GMV'] = df_comp['GMV'] - df_comp['GMV_prev']
     df_comp['wow GMV %'] = (df_comp['GMV'] / gmv_prev_safe - 1).fillna(0)
     df_comp['wow T.A'] = df_comp['Taux Acceptation'] - (df_comp['Auto_Accepted_prev'] / req_prev_safe).fillna(0)
-    df_comp['wow Cancellation'] = df_comp['Taux Cancellation'] - (df_comp['CancelledByRestaurant_prev'] / req_prev_safe).fillna(0)
-    df_comp['Wow CA'] = df_comp['CA'] - df_comp['CA_prev']
     
     if not df_comp.empty and 'GMV' in df_comp.columns:
         df_comp['Tier'] = pd.qcut(df_comp['GMV'].rank(method='first'), q=[0, 0.4, 0.8, 1.0], labels=['Tier C', 'Tier B', 'Tier A'])
@@ -217,7 +202,7 @@ df_prev = df_merged[df_merged['Week'] == semaine_precedente] if semaine_preceden
 # ==========================================
 @st.dialog("🔍 Vue 360° du Restaurant", width="large")
 def popup_restaurant(resto_id, resto_name):
-    df_r = df_merged[df_merged['Restaurant ID'] == resto_id].sort_values('order day')
+    df_r = df_merged[df_merged['Restaurant ID'].astype(str) == str(resto_id)].sort_values('order day')
     
     if df_r.empty:
         st.warning(f"Aucune commande pour {resto_name} dans la base sélectionnée.")
@@ -227,15 +212,32 @@ def popup_restaurant(resto_id, resto_name):
     deliv_tot = len(df_r[df_r['status'] == 'Delivered'])
     gmv_tot = df_r[df_r['status'] == 'Delivered']['item total'].sum()
     
+    # Calculs WoW et MoM
+    max_d = df_r['order day'].max()
+    
+    # WoW (7 derniers jours vs 7 jours précédents)
+    c_7 = df_r[df_r['order day'] >= max_d - timedelta(days=7)]
+    p_7 = df_r[(df_r['order day'] >= max_d - timedelta(days=14)) & (df_r['order day'] < max_d - timedelta(days=7))]
+    gmv_c7 = c_7[c_7['status']=='Delivered']['item total'].sum()
+    gmv_p7 = p_7[p_7['status']=='Delivered']['item total'].sum()
+    wow = (gmv_c7 / gmv_p7 - 1) if gmv_p7 > 0 else 0
+    
+    # MoM (30 derniers jours vs 30 jours précédents)
+    c_30 = df_r[df_r['order day'] >= max_d - timedelta(days=30)]
+    p_30 = df_r[(df_r['order day'] >= max_d - timedelta(days=60)) & (df_r['order day'] < max_d - timedelta(days=30))]
+    gmv_c30 = c_30[c_30['status']=='Delivered']['item total'].sum()
+    gmv_p30 = p_30[p_30['status']=='Delivered']['item total'].sum()
+    mom = (gmv_c30 / gmv_p30 - 1) if gmv_p30 > 0 else 0
+
     st.markdown(f"### 🏪 {resto_name}")
     
     c1, c2, c3 = st.columns(3)
     with c1: st.markdown(f"<div class='purple-box'><h3>Commandes Reçues</h3><h2>{req_tot}</h2></div>", unsafe_allow_html=True)
     with c2: st.markdown(f"<div class='purple-box'><h3>Commandes Livrées</h3><h2>{deliv_tot}</h2></div>", unsafe_allow_html=True)
-    with c3: st.markdown(f"<div class='purple-box'><h3>GMV Généré</h3><h2>{gmv_tot:,.0f} MAD</h2></div>", unsafe_allow_html=True)
+    with c3: st.markdown(f"<div class='purple-box'><h3>GMV Généré</h3><h2>{gmv_tot:,.0f} MAD</h2><p>WoW: {wow:+.1%} | MoM: {mom:+.1%}</p></div>", unsafe_allow_html=True)
     
     df_trend = df_r.groupby('order day').agg(Req=('order id','count'), Deliv=('status', lambda x: (x=='Delivered').sum())).reset_index()
-    fig = px.line(df_trend, x='order day', y=['Req', 'Deliv'], title="Tendance Journalière", markers=True)
+    fig = px.line(df_trend, x='order day', y=['Req', 'Deliv'], title="Tendance Journalière (Reçu vs Livré)", markers=True)
     st.plotly_chart(fig, use_container_width=True)
     
     st.markdown("---")
@@ -243,83 +245,69 @@ def popup_restaurant(resto_id, resto_name):
     
     with col_act:
         st.markdown("#### 📝 Ajouter une Action / Note")
-        nouvelle_note = st.text_area("Description :", placeholder="Relance promo...")
-        if st.button("💾 Enregistrer la note"):
+        nouvelle_note = st.text_area("Description :", placeholder="Relance promo, Installation caisse...", key=f"note_{resto_id}")
+        if st.button("💾 Enregistrer la note", key=f"btn_{resto_id}"):
             ws_notes = crm_sheet.worksheet("Notes_Historique")
             date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
             if df_notes_master.empty: ws_notes.append_row(['Date', 'Restaurant ID', 'Auteur', 'Contenu'])
-            ws_notes.append_row([date_str, int(resto_id), st.session_state.user, nouvelle_note])
+            # CORRECTION : On force le str() pour éviter le ValueError
+            ws_notes.append_row([date_str, str(resto_id), st.session_state.user, nouvelle_note])
             st.success("Note enregistrée ! Fermez le popup pour actualiser.")
 
-        st.markdown("#### 📜 Historique")
-        notes_r = df_notes_master[df_notes_master['Restaurant ID'] == resto_id]
+        st.markdown("#### 📜 Historique & Impact Avant/Après")
+        notes_r = df_notes_master[df_notes_master['Restaurant ID'].astype(str) == str(resto_id)]
         if not notes_r.empty:
-            for _, row in notes_r.iterrows():
+            for idx_note, row in notes_r.iterrows():
                 with st.expander(f"📅 {row['Date']} par {row['Auteur']}"):
                     st.write(row['Contenu'])
+                    
+                    # NOUVEAU : Le filtre dynamique de la période (7, 15 ou 30 jours)
+                    jours = st.radio("Période d'analyse :", [7, 15, 30], format_func=lambda x: f"{x} Jours", horizontal=True, key=f"radio_{idx_note}_{resto_id}")
+                    
                     try:
                         date_note = pd.to_datetime(row['Date']).date()
                         df_r['date_only'] = df_r['order day'].dt.date
-                        avant = df_r[(df_r['date_only'] < date_note) & (df_r['date_only'] >= date_note - timedelta(days=7))]
-                        apres = df_r[(df_r['date_only'] >= date_note) & (df_r['date_only'] <= date_note + timedelta(days=7))]
+                        avant = df_r[(df_r['date_only'] < date_note) & (df_r['date_only'] >= date_note - timedelta(days=jours))]
+                        apres = df_r[(df_r['date_only'] >= date_note) & (df_r['date_only'] <= date_note + timedelta(days=jours))]
                         
                         gmv_av = avant[avant['status'] == 'Delivered']['item total'].sum()
                         gmv_ap = apres[apres['status'] == 'Delivered']['item total'].sum()
                         evo = (gmv_ap / gmv_av - 1) if gmv_av > 0 else 0
-                        st.info(f"📊 Impact 7j : GMV Avant = {gmv_av:,.0f} | GMV Après = {gmv_ap:,.0f} ({evo:+.1%})")
+                        st.info(f"📊 Impact ({jours}j Avant vs Après) : GMV Avant = {gmv_av:,.0f} | GMV Après = {gmv_ap:,.0f} ({evo:+.1%})")
                     except: pass
         else:
-            st.info("Aucune note.")
+            st.info("Aucune note pour ce restaurant.")
 
     with col_trans:
         st.markdown("#### 🔄 Transférer le restaurant")
-        current_am = df_pipeline_master[df_pipeline_master['Restaurant ID'] == resto_id]['AM_Name'].iloc[0] if not df_pipeline_master[df_pipeline_master['Restaurant ID'] == resto_id].empty else "Inconnu"
+        pipe_am = df_pipeline_master[df_pipeline_master['Restaurant ID'].astype(str) == str(resto_id)]
+        current_am = pipe_am['AM_Name'].iloc[0] if not pipe_am.empty else "Global / Inconnu"
         st.write(f"Pipeline actuelle : **{current_am}**")
-        nouveau_am = st.selectbox("Transférer vers :", ["Houda", "Chaima", "Najwa", "Imane"], index=["Houda", "Chaima", "Najwa", "Imane"].index(current_am) if current_am in ["Houda", "Chaima", "Najwa", "Imane"] else 0)
+        nouveau_am = st.selectbox("Transférer vers :", ["Houda", "Chaima", "Najwa", "Imane"], key=f"trans_{resto_id}")
         
-        if st.button("🚀 Valider le transfert"):
+        if st.button("🚀 Valider le transfert", key=f"btn_trans_{resto_id}"):
             ws_pipe = crm_sheet.worksheet("Pipelines")
             try:
                 cell = ws_pipe.find(str(resto_id), in_column=1)
                 ws_pipe.update_cell(cell.row, 3, nouveau_am)
             except:
-                ws_pipe.append_row([int(resto_id), resto_name, nouveau_am])
+                # CORRECTION : On force le str() pour éviter le ValueError
+                ws_pipe.append_row([str(resto_id), resto_name, nouveau_am])
             st.success(f"Transféré à {nouveau_am} ! Fermez le popup.")
 
 
-# ==========================================
-# 6. CORRECTION DE LA FONCTION MERGE_EXT
-# ==========================================
 def merge_external_list(df_external, expected_list, comp_df):
-    """Permet d'afficher TOUS les restaurants d'une liste sans erreur de Catégorie (Tier)"""
     res = pd.merge(pd.merge(df_external[['Restaurant ID']], expected_list[['Restaurant ID', 'Restaurant Name']], on='Restaurant ID', how='inner'), comp_df.drop(columns=['Restaurant Name'], errors='ignore'), on='Restaurant ID', how='left')
-    
-    # Remplacement par 0 uniquement pour les colonnes numériques
-    metrics_num = ['Requested', 'Delivered', 'GMV', 'wow GMV', 'wow GMV %', 'Success Rate', 'Taux Acceptation', 'wow delivered %']
-    for m in metrics_num:
-        if m in res.columns:
-            res[m] = res[m].fillna(0)
-            
-    # Traitement sécurisé de la colonne Catégorique "Tier"
-    if 'Tier' in res.columns:
-        res['Tier'] = res['Tier'].astype(str).replace('nan', 'Non classé')
-        
-    if 'Area' in res.columns: 
-        res['Area'] = res['Area'].fillna('Aucune Cmd')
-        
+    for m in ['Requested', 'Delivered', 'GMV', 'wow GMV', 'wow GMV %', 'Success Rate', 'Taux Acceptation', 'wow delivered %']:
+        if m in res.columns: res[m] = res[m].fillna(0)
+    if 'Tier' in res.columns: res['Tier'] = res['Tier'].astype(str).replace('nan', 'Non classé')
     return res
 
-
 # ==========================================
-# 7. ONGLETS ET AFFICHAGES VISUELS (LES 9 ONGLETS)
+# 6. ONGLETS ET AFFICHAGES VISUELS
 # ==========================================
-tabs = st.tabs([
-    "🌍 1. Macro", "📈 2. Overview", "❌ 3. Annulations", 
-    "🤖 4. Auto", "💻 5. Caisse.ma", "✨ 6. New", 
-    "👻 7. Inactifs", "🏆 8. Héros", "🍕 9. Catégories"
-])
+tabs = st.tabs(["🌍 1. Macro", "📈 2. Overview", "❌ 3. Annulations", "🤖 4. Auto", "💻 5. Caisse.ma", "✨ 6. New", "👻 7. Inactifs", "🏆 8. Héros", "🍕 9. Catégories"])
 
-# -- ONGLET 1 --
 with tabs[0]:
     st.markdown("#### 🌍 Analyse Macro")
     df_macro = df_merged.groupby('Week').agg(
@@ -328,7 +316,6 @@ with tabs[0]:
     ).reset_index().sort_values(by='Week', ascending=False)
     st.dataframe(df_macro, use_container_width=True, hide_index=True)
 
-# -- ONGLET 2 (AVEC CLICK POPUP) --
 with tabs[1]:
     st.markdown("#### 📋 Base Détaillée (🖱️ Cliquez sur une ligne pour ouvrir le CRM)")
     resto_curr, resto_prev = compute_metrics(df_current, ['Area', 'Restaurant ID', 'Restaurant Name']), compute_metrics(df_prev, ['Area', 'Restaurant ID', 'Restaurant Name'])
@@ -344,13 +331,11 @@ with tabs[1]:
         idx = event.selection.rows[0]
         popup_restaurant(df_disp.iloc[idx]['Restaurant ID'], df_disp.iloc[idx]['Restaurant Name'])
 
-# -- ONGLET 3 --
 with tabs[2]:
     st.markdown("#### ❌ Annulations")
     df_canc = df_current[df_current['status'].str.contains('Cancelled', case=False, na=False)]
     if not df_canc.empty: st.plotly_chart(px.pie(df_canc['cancellation reason '].value_counts().reset_index(), names='cancellation reason ', values='count', hole=0.4))
 
-# -- ONGLET 4 --
 with tabs[3]:
     st.markdown("#### 🤖 Automatisation (Accepted By)")
     if 'Accepted By' in df_current.columns:
@@ -359,21 +344,26 @@ with tabs[3]:
         auto_recap['Type'] = auto_recap['Is_Auto'].map({True: '🤖 Automatisé', False: '👨‍💻 Manuel'})
         st.dataframe(auto_recap[['Type', 'Req', 'Del']], hide_index=True)
 
-# -- ONGLET 5 --
 with tabs[4]:
-    st.markdown("#### 💻 Caisse.ma")
+    st.markdown("#### 💻 Caisse.ma (🖱️ Cliquez sur une ligne)")
     if not df_caisse.empty:
         df_caisse_comp = merge_external_list(df_caisse, liste_attendue, resto_comp)
-        if not df_caisse_comp.empty: st.dataframe(df_caisse_comp[['Restaurant Name', 'Requested', 'GMV']], hide_index=True)
+        if not df_caisse_comp.empty: 
+            event_c = st.dataframe(df_caisse_comp[['Restaurant ID', 'Restaurant Name', 'Requested', 'GMV']], column_config={"Restaurant ID": None}, hide_index=True, on_select="rerun", selection_mode="single-row")
+            if event_c.selection.rows:
+                idx = event_c.selection.rows[0]
+                popup_restaurant(df_caisse_comp.iloc[idx]['Restaurant ID'], df_caisse_comp.iloc[idx]['Restaurant Name'])
 
-# -- ONGLET 6 --
 with tabs[5]:
-    st.markdown("#### ✨ New Restaurants")
+    st.markdown("#### ✨ New Restaurants (🖱️ Cliquez sur une ligne)")
     if not df_new.empty:
         df_new_comp = merge_external_list(df_new, liste_attendue, resto_comp)
-        if not df_new_comp.empty: st.dataframe(df_new_comp[['Restaurant Name', 'Requested', 'GMV']], hide_index=True)
+        if not df_new_comp.empty: 
+            event_n = st.dataframe(df_new_comp[['Restaurant ID', 'Restaurant Name', 'Requested', 'GMV']], column_config={"Restaurant ID": None}, hide_index=True, on_select="rerun", selection_mode="single-row")
+            if event_n.selection.rows:
+                idx = event_n.selection.rows[0]
+                popup_restaurant(df_new_comp.iloc[idx]['Restaurant ID'], df_new_comp.iloc[idx]['Restaurant Name'])
 
-# -- ONGLET 7 --
 with tabs[6]:
     st.markdown("#### 👻 Inactifs")
     max_d = df_merged['order day'].max()
@@ -382,7 +372,6 @@ with tabs[6]:
     st.error(f"⚠️ {len(restos_inactifs)} restaurants inactifs depuis 7j")
     st.dataframe(restos_inactifs[['Restaurant Name']], hide_index=True)
 
-# -- ONGLET 8 --
 with tabs[7]:
     st.markdown("#### 🏆 Produits Héros")
     if 'Food Item' in df_current.columns:
@@ -390,7 +379,6 @@ with tabs[7]:
         df_items['Item'] = df_items['Item'].str.strip()
         st.dataframe(df_items[(df_items['Item'] != 'nan') & (df_items['Item'] != '')]['Item'].value_counts().head(15).reset_index())
 
-# -- ONGLET 9 --
 with tabs[8]:
     st.markdown("#### 🍕 Catégories Food")
     if 'Food Category' in df_current.columns:
