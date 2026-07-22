@@ -102,11 +102,12 @@ def clean_id_series(s):
         return s
     return s.astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
 
-# --- CHARGEMENT ROBUSTE DU REFERENTIEL RST_list (GSHEETS + SECOURS CSV) ---
+# --- CHARGEMENT UNIVERSEL ET ULTRA-ROBUSTE DE RST_list ---
 @st.cache_data(ttl=600)
 def load_rst_list_master():
     df_rst = pd.DataFrame()
-    # 1. Essai via Google Sheets
+
+    # 1. Essai principal via Google Sheets natif (gspread)
     try:
         sheet_rst = gc.open("RST_list")
         records = sheet_rst.sheet1.get_all_records()
@@ -114,19 +115,58 @@ def load_rst_list_master():
     except Exception:
         df_rst = pd.DataFrame()
 
-    # 2. Secours via le fichier CSV local si GSheets n'est pas accessible
+    # 2. Secours via l'API Google Drive (si RST_list.csv)
+    if df_rst.empty:
+        try:
+            results = drive_service.files().list(
+                q="name = 'RST_list.csv' or name = 'RST_list' or name contains 'restaurant-export'",
+                fields="files(id, name, mimeType)"
+            ).execute()
+            files = results.get('files', [])
+
+            if files:
+                file_id = files[0]['id']
+                req = drive_service.files().get_media(fileId=file_id)
+                fh = io.BytesIO()
+                downloader = MediaIoBaseDownload(fh, req)
+                done = False
+                while not done:
+                    _, done = downloader.next_chunk()
+                fh.seek(0)
+
+                try:
+                    df_rst = pd.read_csv(fh, sep=";", dtype=str)
+                    if df_rst.shape[1] <= 2:
+                        fh.seek(0)
+                        df_rst = pd.read_csv(fh, sep=",", dtype=str)
+                except Exception:
+                    fh.seek(0)
+                    df_rst = pd.read_csv(fh, sep=",", dtype=str)
+        except Exception:
+            df_rst = pd.DataFrame()
+
+    # 3. Secours via le fichier CSV local en dernier recours
     if df_rst.empty:
         try:
             df_rst = pd.read_csv("restaurant-export-2026-05-15.csv", sep=";", dtype=str)
         except Exception:
             df_rst = pd.DataFrame()
 
-    # Nettoyage et formatage des colonnes
+    # Nettoyage et harmonisation automatique des colonnes
     if not df_rst.empty:
-        if 'Restaurant ID' in df_rst.columns:
+        df_rst.columns = [str(c).strip() for c in df_rst.columns]
+        
+        # Harmonisation de l'ID Restaurant
+        col_id = next((c for c in df_rst.columns if "restaurant id" in c.lower() or c.lower() == "id"), None)
+        if col_id:
+            df_rst.rename(columns={col_id: 'Restaurant ID'}, inplace=True)
             df_rst['Restaurant ID'] = clean_id_series(df_rst['Restaurant ID'])
-        if 'Restaurant Name' not in df_rst.columns and 'restaurant name' in df_rst.columns:
-            df_rst.rename(columns={'restaurant name': 'Restaurant Name'}, inplace=True)
+            
+        # Harmonisation du nom du Restaurant
+        col_name = next((c for c in df_rst.columns if "restaurant name" in c.lower()), None)
+        if col_name and col_name != 'Restaurant Name':
+            df_rst.rename(columns={col_name: 'Restaurant Name'}, inplace=True)
+
         if 'Main City' in df_rst.columns:
             df_rst['Main City'] = df_rst['Main City'].astype(str).str.strip()
         if 'Sub City' in df_rst.columns:
