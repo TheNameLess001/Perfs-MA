@@ -840,10 +840,16 @@ tabs = st.tabs(["🌍 1. Macro", "📈 2. Overview", "❌ 3. Annulations", "🤖
 # ONGLET 1 : ANALYSE GLOBAL (MACRO)
 # ----------------------------------------
 with tabs[0]:
-    st.markdown("#### 🌍 Analyse Macro des Performances (🖱️ Cliquez sur une semaine)")
-    vue_temporelle = st.radio("Sélectionnez la vue globale :", ["📊 Par Semaine", "📅 Par Jour"], horizontal=True, key="macro_vue_temporelle")
+    st.markdown("#### 🌍 Analyse Macro des Performances (🖱️ Cliquez sur une période)")
+    vue_temporelle = st.radio("Sélectionnez la vue globale :", ["📊 Par Semaine", "🗓️ Par Mois", "📅 Par Jour"], horizontal=True, key="macro_vue_temporelle")
     df_macro_base = df_merged.copy()
-    df_macro_base['Période'] = df_macro_base['order day'].dt.strftime('%Y-%m-%d') if vue_temporelle == "📅 Par Jour" else df_macro_base['Week']
+    
+    if vue_temporelle == "📅 Par Jour":
+        df_macro_base['Période'] = df_macro_base['order day'].dt.strftime('%Y-%m-%d')
+    elif vue_temporelle == "🗓️ Par Mois":
+        df_macro_base['Période'] = df_macro_base['order day'].dt.strftime('%Y-%m')
+    else:
+        df_macro_base['Période'] = df_macro_base['Week']
 
     df_macro = df_macro_base.groupby('Période').agg(
         Reçu=('order id', 'count'), Livré=('status', lambda x: (x == 'Delivered').sum()),
@@ -1018,7 +1024,7 @@ with tabs[1]:
             st.session_state.popup_entity_type = 'Restaurant'
             st.session_state.popup_entity_id = flop30.iloc[r_idx]['Restaurant ID']
             st.session_state.popup_entity_name = flop30.iloc[r_idx]['Restaurant Name']
-
+            
 # ----------------------------------------
 # ONGLET 3 : ANNULATIONS (RÉCIDIVISTES CLIQUABLES)
 # ----------------------------------------
