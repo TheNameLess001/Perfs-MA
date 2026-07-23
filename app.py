@@ -1257,7 +1257,7 @@ with tabs[8]:
             st.session_state.popup_entity_name = disp_cat.iloc[ev_cat.selection.rows[0]]['Food Category']
 
 # ----------------------------------------
-# ONGLET 10 : BONUS & PRIMES (RÉSERVÉ NAJWA / ADMIN - AVEC SIMULATEUR OLD_PIPELINE)
+# ONGLET 10 : BONUS & PRIMES (RÉSERVÉ NAJWA / ADMIN - AVEC SIMULATEUR OLD_PIPELINE SÉCURISÉ)
 # ----------------------------------------
 with tabs[9]:
     st.markdown("#### 💰 Calculateur de Primes Trimestrielles (Quarter over Quarter)")
@@ -1387,7 +1387,7 @@ with tabs[9]:
         else:
             st.info("Aucune donnée disponible pour le calcul des primes.")
 
-        # --- 3. SIMULATEUR PROVISOIRE Q2 (CONNECTÉ À OLD_PIPELINE) ---
+        # --- 3. SIMULATEUR PROVISOIRE Q2 (CONNECTÉ À OLD_PIPELINE & 100% SÉCURISÉ CONTRE LES VALEURS NULLES) ---
         st.markdown("---")
         st.markdown("#### 🛠️ Simulateur Provisoire Q2 (Ancien Périmètre : Google Sheet `Old_Pipeline`)")
         
@@ -1402,7 +1402,7 @@ with tabs[9]:
             
             ams_dispos = ["Houda", "Chaima", "Najwa", "Imane", "Custom"]
             if 'df_old_pipeline_master' in globals() and not df_old_pipeline_master.empty and 'AM_Name_Old' in df_old_pipeline_master.columns:
-                ams_from_sheet = sorted([str(a).strip() for a in df_old_pipeline_master['AM_Name_Old'].unique() if str(a).strip() not in ['nan', '', 'None']])
+                ams_from_sheet = sorted([str(a).strip() for a in df_old_pipeline_master['AM_Name_Old'].dropna().unique() if pd.notnull(a) and str(a).strip() not in ['nan', '', 'None', '<NA>']])
                 if ams_from_sheet:
                     ams_dispos = ams_from_sheet + [a for a in ams_dispos if a not in ams_from_sheet]
             
@@ -1415,8 +1415,10 @@ with tabs[9]:
             
             if ids_old_am:
                 st.info(f"📌 **{len(ids_old_am)}** restaurants automatiquement attribués à **{sim_am}** via `Old_Pipeline`.")
-                restos_associes = df_merged_full[df_merged_full['Restaurant ID'].isin(ids_old_am)][['Restaurant ID', 'Restaurant Name']].drop_duplicates().sort_values('Restaurant Name')
-                list_noms = sorted(restos_associes['Restaurant Name'].astype(str).unique())
+                restos_associes = df_merged_full[df_merged_full['Restaurant ID'].isin(ids_old_am)]
+                
+                # --- SÉCURISATION BLINDÉE CONTRE LES NOMS VIDES ---
+                list_noms = sorted([str(r).strip() for r in restos_associes['Restaurant Name'].dropna().unique() if pd.notnull(r) and str(r).strip() not in ['nan', '', 'None', '<NA>']])
                 default_kam = [r for r in list_noms if any(k in r.lower() for k in ['mcdo', 'kfc', 'burger king', 'pizza hut', 'domino', 'starbucks', 'carrefour', 'paul', 'baskin'])]
                 sim_excl_kam = st.multiselect("🏢 Exclure des chaînes / KAM (optionnel) :", list_noms, default=default_kam, key="sim_q2_kam_old")
                 
@@ -1426,18 +1428,19 @@ with tabs[9]:
                 ].copy()
             else:
                 # Mode secours par villes si l'AM n'est pas trouvé dans Old_Pipeline
-                all_cities = sorted([str(c).strip() for c in df_merged_full['city'].dropna().unique() if str(c).strip() != 'nan'])
+                all_cities = sorted([str(c).strip() for c in df_merged_full['city'].dropna().unique() if pd.notnull(c) and str(c).strip() not in ['nan', '', 'None', '<NA>']])
                 presets_am = {"Houda": ["Casablanca", "Mohammedia"], "Chaima": ["Rabat", "Salé", "Kenitra"], "Najwa": ["Marrakech", "Agadir", "Tanger"], "Imane": ["Fès", "Meknès", "Oujda"]}
                 def_cities = [c for c in presets_am.get(sim_am, all_cities[:2]) if c in all_cities]
                 sim_cities = st.multiselect("🏙️ Villes assignées (secours) :", all_cities, default=def_cities if def_cities else all_cities, key="sim_q2_cities")
                 
-                restos_in_cities = sorted(df_merged_full[df_merged_full['city'].isin(sim_cities)]['Restaurant Name'].astype(str).unique()) if sim_cities else []
+                # --- SÉCURISATION BLINDÉE DU TRI DES RESTAURANTS PAR VILLE ---
+                restos_in_cities = sorted([str(r).strip() for r in df_merged_full[df_merged_full['city'].isin(sim_cities)]['Restaurant Name'].dropna().unique() if pd.notnull(r) and str(r).strip() not in ['nan', '', 'None', '<NA>']])
                 default_kam = [r for r in restos_in_cities if any(k in r.lower() for k in ['mcdo', 'kfc', 'burger king', 'pizza hut', 'domino', 'starbucks', 'carrefour', 'paul', 'baskin'])]
                 sim_excl_kam = st.multiselect("🏢 Chaînes / KAM à exclure :", restos_in_cities, default=default_kam, key="sim_q2_kam_old_fb")
                 
                 df_prov = df_merged_full[(df_merged_full['city'].isin(sim_cities)) & (~df_merged_full['Restaurant Name'].astype(str).isin(sim_excl_kam))].copy()
 
-            all_quarters = sorted((df_merged_full['order day'].dt.year.astype(str) + "-Q" + df_merged_full['order day'].dt.quarter.astype(str)).unique(), reverse=True)
+            all_quarters = sorted([str(q).strip() for q in (df_merged_full['order day'].dt.year.astype(str) + "-Q" + df_merged_full['order day'].dt.quarter.astype(str)).dropna().unique() if pd.notnull(q) and str(q).strip() not in ['nan', '', 'None', '<NA>']], reverse=True)
             def_q2 = next((q for q in all_quarters if "Q2" in q), all_quarters[0] if all_quarters else "2026-Q2")
             sim_target_q = st.selectbox("🎯 Trimestre cible :", all_quarters, index=all_quarters.index(def_q2) if def_q2 in all_quarters else 0, key="sim_q2_target")
 
