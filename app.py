@@ -1371,7 +1371,7 @@ with tabs[9]:
             default_kam = [r for r in restos_in_cities if any(k in r.lower() for k in ['mcdo', 'kfc', 'burger king', 'pizza hut', 'domino', 'starbucks', 'carrefour', 'paul', 'baskin'])]
             sim_excl_kam = st.multiselect("🏢 Chaînes / KAM à exclure :", restos_in_cities, default=default_kam, key="sim_q2_kam")
             
-            all_quarters = sorted(df_merged_full['order day'].dt.year.astype(str) + "-Q" + df_merged_full['order day'].dt.quarter.astype(str).unique(), reverse=True)
+            all_quarters = sorted((df_merged_full['order day'].dt.year.astype(str) + "-Q" + df_merged_full['order day'].dt.quarter.astype(str)).unique(), reverse=True)
             def_q2 = next((q for q in all_quarters if "Q2" in q), all_quarters[0] if all_quarters else "2026-Q2")
             sim_target_q = st.selectbox("🎯 Trimestre cible :", all_quarters, index=all_quarters.index(def_q2) if def_q2 in all_quarters else 0, key="sim_q2_target")
 
