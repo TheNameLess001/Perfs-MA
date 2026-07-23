@@ -789,9 +789,9 @@ def popup_360(entity_type, entity_id, entity_name):
                 st.success(f"Transféré à {nouveau_am} !")
                 
 # ==========================================
-# 6. ONGLETS ET AFFICHAGES VISUELS (100% CLIQUABLES)
+# 6. ONGLETS ET AFFICHAGES VISUELS (100% CLIQUABLES + BONUS PRORATA)
 # ==========================================
-tabs = st.tabs(["🌍 1. Macro", "📈 2. Overview", "❌ 3. Annulations", "🤖 4. Auto", "💻 5. Caisse.ma", "✨ 6. New", "👻 7. Inactifs", "🏆 8. Héros", "🍕 9. Catégories"])
+tabs = st.tabs(["🌍 1. Macro", "📈 2. Overview", "❌ 3. Annulations", "🤖 4. Auto", "💻 5. Caisse.ma", "✨ 6. New", "👻 7. Inactifs", "🏆 8. Héros", "🍕 9. Catégories", "💰 10. Bonus"])
 
 # ----------------------------------------
 # ONGLET 1 : ANALYSE GLOBAL (MACRO)
@@ -1213,14 +1213,144 @@ with tabs[8]:
             st.session_state.popup_entity_id = disp_cat.iloc[ev_cat.selection.rows[0]]['Food Category']
             st.session_state.popup_entity_name = disp_cat.iloc[ev_cat.selection.rows[0]]['Food Category']
 
+# ----------------------------------------
+# ONGLET 10 : BONUS & PRIMES (RÉSERVÉ NAJWA / ADMIN - AVEC PRORATA ≥ 80%)
+# ----------------------------------------
+with tabs[9]:
+    st.markdown("#### 💰 Calculateur de Primes Trimestrielles (Quarter over Quarter)")
+    
+    utilisateur_actuel = st.session_state.get("user", "").lower()
+    if utilisateur_actuel not in ['najwa', 'admin']:
+        st.error("🔒 **Accès Restreint :** Cet onglet est confidentiel et exclusivement réservé à l'administration et à Najwa.")
+    else:
+        st.success(f"🔓 **Accès Direction Autorisé** — Analyse des primes active pour le périmètre : **{am_choisi}**")
+        st.info("ℹ️ **Règle de Prime :** Prorata à partir de **80% d'atteinte** de l'objectif (Plafond à 100% = 2 000 DH par KPI / Max 6 000 DH au total).")
+        
+        df_q_base = df_merged.copy()
+        df_q_base['Quarter'] = df_q_base['order day'].dt.year.astype(str) + "-Q" + df_q_base['order day'].dt.quarter.astype(str)
+        
+        q_metrics = compute_metrics(df_q_base, ['Quarter']).sort_values('Quarter', ascending=True)
+        
+        if not q_metrics.empty:
+            q_metrics['GMV_prev'] = q_metrics['GMV'].shift(1)
+            q_metrics['Growth GMV'] = (q_metrics['GMV'] / q_metrics['GMV_prev'].replace(0, np.nan) - 1).fillna(0)
+            q_metrics['Taux Cancel'] = (q_metrics['CancelledByRestaurant'] / q_metrics['Requested'].replace(0, np.nan)).fillna(0)
+            q_metrics['Taux Auto'] = (q_metrics['Auto_Accepted'] / q_metrics['Requested'].replace(0, np.nan)).fillna(0)
+            
+            # 1. CALCUL DU TAUX D'ATTEINTE (PLAFONNÉ À 100% / 1.0 MAX)
+            q_metrics['Atteinte GMV'] = np.where(q_metrics['GMV_prev'] > 0, np.clip(q_metrics['Growth GMV'] / 0.30, 0, 1.0), 0)
+            q_metrics['Atteinte Cancel'] = np.where(q_metrics['Taux Cancel'] > 0, np.clip(0.03 / q_metrics['Taux Cancel'], 0, 1.0), 1.0)
+            q_metrics['Atteinte Cancel'] = np.where(q_metrics['Requested'] > 0, q_metrics['Atteinte Cancel'], 0)
+            q_metrics['Atteinte Auto'] = np.where(q_metrics['Requested'] > 0, np.clip(q_metrics['Taux Auto'] / 0.50, 0, 1.0), 0)
+            
+            # 2. CALCUL DES PRIMES : SI ATTEINTE >= 80% -> ATTEINTE * 2000 DH, SINON 0 DH
+            q_metrics['Prime GMV (DH)'] = np.where(q_metrics['Atteinte GMV'] >= 0.80, q_metrics['Atteinte GMV'] * 2000, 0)
+            q_metrics['Prime Cancel (DH)'] = np.where(q_metrics['Atteinte Cancel'] >= 0.80, q_metrics['Atteinte Cancel'] * 2000, 0)
+            q_metrics['Prime Auto (DH)'] = np.where(q_metrics['Atteinte Auto'] >= 0.80, q_metrics['Atteinte Auto'] * 2000, 0)
+            
+            q_metrics['Total Prime (DH)'] = q_metrics['Prime GMV (DH)'] + q_metrics['Prime Cancel (DH)'] + q_metrics['Prime Auto (DH)']
+            
+            last_row = q_metrics.iloc[-1]
+            st.markdown(f"##### 🎯 Performance Trimestre Actif (**{last_row['Quarter']}**) vs Objectifs")
+            b_q1, b_q2, b_q3 = st.columns(3)
+            with b_q1:
+                stat_badge = "🟢" if last_row['Atteinte GMV'] == 1.0 else ("🟡" if last_row['Atteinte GMV'] >= 0.80 else "🔴")
+                st.markdown(f"<div class='purple-box'><h3>Croissance GMV (Obj: ≥30%)</h3><h2>{last_row['Growth GMV']:+.1%}</h2><p>{stat_badge} Atteinte: {last_row['Atteinte GMV']:.1%} ➡️ <b>{last_row['Prime GMV (DH)']:,.0f} DH</b></p></div>", unsafe_allow_html=True)
+            with b_q2:
+                stat_badge = "🟢" if last_row['Atteinte Cancel'] == 1.0 else ("🟡" if last_row['Atteinte Cancel'] >= 0.80 else "🔴")
+                st.markdown(f"<div class='purple-box'><h3>Annulations Resto (Obj: ≤3%)</h3><h2>{last_row['Taux Cancel']:.1%}</h2><p>{stat_badge} Atteinte: {last_row['Atteinte Cancel']:.1%} ➡️ <b>{last_row['Prime Cancel (DH)']:,.0f} DH</b></p></div>", unsafe_allow_html=True)
+            with b_q3:
+                stat_badge = "🟢" if last_row['Atteinte Auto'] == 1.0 else ("🟡" if last_row['Atteinte Auto'] >= 0.80 else "🔴")
+                st.markdown(f"<div class='purple-box'><h3>Taux Automation (Obj: ≥50%)</h3><h2>{last_row['Taux Auto']:.1%}</h2><p>{stat_badge} Atteinte: {last_row['Atteinte Auto']:.1%} ➡️ <b>{last_row['Prime Auto (DH)']:,.0f} DH</b></p></div>", unsafe_allow_html=True)
+            
+            st.markdown("---")
+            st.markdown("##### 📋 Historique et Primes Trimestrielles (Périmètre sélectionné)")
+            
+            disp_q = q_metrics.sort_values('Quarter', ascending=False).copy()
+            
+            def format_kpi_prime(val_pct, att_pct, prime_dh, is_growth=False, is_cancel=False):
+                icon = "🟢" if att_pct == 1.0 else ("🟡" if att_pct >= 0.80 else "🔴")
+                val_str = f"{val_pct:+.1%}" if is_growth else f"{val_pct:.1%}"
+                return f"{icon} {val_str} (Att: {att_pct:.0%} ➡️ {prime_dh:,.0f} DH)"
+
+            disp_q['Croissance GMV (≥30%)'] = disp_q.apply(lambda r: format_kpi_prime(r['Growth GMV'], r['Atteinte GMV'], r['Prime GMV (DH)'], is_growth=True), axis=1)
+            disp_q['Annulations Resto (≤3%)'] = disp_q.apply(lambda r: format_kpi_prime(r['Taux Cancel'], r['Atteinte Cancel'], r['Prime Cancel (DH)'], is_cancel=True), axis=1)
+            disp_q['Automation (≥50%)'] = disp_q.apply(lambda r: format_kpi_prime(r['Taux Auto'], r['Atteinte Auto'], r['Prime Auto (DH)']), axis=1)
+            
+            table_bonus = disp_q[[
+                'Quarter', 'Requested', 'GMV', 
+                'Croissance GMV (≥30%)', 'Annulations Resto (≤3%)', 'Automation (≥50%)', 
+                'Total Prime (DH)'
+            ]]
+            
+            st.dataframe(
+                table_bonus.style.format({
+                    'Requested': '{:,.0f}',
+                    'GMV': '{:,.0f} MAD',
+                    'Total Prime (DH)': '💰 {:,.0f} DH'
+                }),
+                hide_index=True,
+                use_container_width=True
+            )
+            
+            # --- VUE MANAGEMENT : COMPARATIF PAR AM ---
+            st.markdown("---")
+            st.markdown("##### 🏆 Vue Direction : Comparatif des Account Managers (Dernier Trimestre)")
+            
+            df_all_q = df_merged_full.copy()
+            df_all_q['Quarter'] = df_all_q['order day'].dt.year.astype(str) + "-Q" + df_all_q['order day'].dt.quarter.astype(str)
+            
+            pipe_ref = df_pipeline_master[['Restaurant ID', 'AM_Name']].drop_duplicates(subset=['Restaurant ID']) if not df_pipeline_master.empty else pd.DataFrame(columns=['Restaurant ID', 'AM_Name'])
+            df_all_q = pd.merge(df_all_q.drop(columns=['AM_Name'], errors='ignore'), pipe_ref, on='Restaurant ID', how='left')
+            df_all_q['AM_Name'] = df_all_q['AM_Name'].fillna('Non Assigné / Global')
+                
+            ams_metrics = compute_metrics(df_all_q, ['AM_Name', 'Quarter']).sort_values(['AM_Name', 'Quarter'])
+            ams_metrics['GMV_prev'] = ams_metrics.groupby('AM_Name')['GMV'].shift(1)
+            ams_metrics['Growth GMV'] = (ams_metrics['GMV'] / ams_metrics['GMV_prev'].replace(0, np.nan) - 1).fillna(0)
+            ams_metrics['Taux Cancel'] = (ams_metrics['CancelledByRestaurant'] / ams_metrics['Requested'].replace(0, np.nan)).fillna(0)
+            ams_metrics['Taux Auto'] = (ams_metrics['Auto_Accepted'] / ams_metrics['Requested'].replace(0, np.nan)).fillna(0)
+            
+            ams_metrics['Att GMV'] = np.where(ams_metrics['GMV_prev'] > 0, np.clip(ams_metrics['Growth GMV'] / 0.30, 0, 1.0), 0)
+            ams_metrics['Att Cancel'] = np.where(ams_metrics['Taux Cancel'] > 0, np.clip(0.03 / ams_metrics['Taux Cancel'], 0, 1.0), 1.0)
+            ams_metrics['Att Cancel'] = np.where(ams_metrics['Requested'] > 0, ams_metrics['Att Cancel'], 0)
+            ams_metrics['Att Auto'] = np.where(ams_metrics['Requested'] > 0, np.clip(ams_metrics['Taux Auto'] / 0.50, 0, 1.0), 0)
+            
+            ams_metrics['Prime GMV'] = np.where(ams_metrics['Att GMV'] >= 0.80, ams_metrics['Att GMV'] * 2000, 0)
+            ams_metrics['Prime Cancel'] = np.where(ams_metrics['Att Cancel'] >= 0.80, ams_metrics['Att Cancel'] * 2000, 0)
+            ams_metrics['Prime Auto'] = np.where(ams_metrics['Att Auto'] >= 0.80, ams_metrics['Att Auto'] * 2000, 0)
+            ams_metrics['Total Prime'] = ams_metrics['Prime GMV'] + ams_metrics['Prime Cancel'] + ams_metrics['Prime Auto']
+            
+            dernier_trimestre = ams_metrics['Quarter'].max()
+            if pd.notnull(dernier_trimestre):
+                ams_last = ams_metrics[ams_metrics['Quarter'] == dernier_trimestre].copy()
+                ams_last = ams_last[ams_last['AM_Name'] != 'Non Assigné / Global']
+                
+                ams_last['Croissance GMV'] = ams_last.apply(lambda r: f"{r['Growth GMV']:+.1%} (Att: {r['Att GMV']:.0%} ➡️ {r['Prime GMV']:,.0f} DH)", axis=1)
+                ams_last['Annulations Resto'] = ams_last.apply(lambda r: f"{r['Taux Cancel']:.1%} (Att: {r['Att Cancel']:.0%} ➡️ {r['Prime Cancel']:,.0f} DH)", axis=1)
+                ams_last['Automation'] = ams_last.apply(lambda r: f"{r['Taux Auto']:.1%} (Att: {r['Att Auto']:.0%} ➡️ {r['Prime Auto']:,.0f} DH)", axis=1)
+                
+                table_am = ams_last[['AM_Name', 'Requested', 'GMV', 'Croissance GMV', 'Annulations Resto', 'Automation', 'Total Prime']].sort_values('Total Prime', ascending=False)
+                table_am.columns = ['Account Manager', 'Commandes', 'GMV (MAD)', 'Croissance GMV (≥30%)', 'Cancel Resto (≤3%)', 'Automation (≥50%)', 'Prime Gagnée (DH)']
+                
+                st.dataframe(
+                    table_am.style.format({
+                        'Commandes': '{:,.0f}',
+                        'GMV (MAD)': '{:,.0f} MAD',
+                        'Prime Gagnée (DH)': '💰 {:,.0f} DH'
+                    }),
+                    hide_index=True,
+                    use_container_width=True
+                )
+        else:
+            st.info("Aucune donnée disponible pour le calcul des primes.")
+
 # ==========================================
-# GESTION SÉCURISÉE DU POPUP (AVEC NETTOYAGE AUTO DE L'HISTORIQUE)
+# GESTION SÉCURISÉE DU POPUP (FIN DU FICHIER)
 # ==========================================
 if st.session_state.get("popup_entity_id") is not None and st.session_state.get("popup_entity_type") is not None:
-    # Si le clic provient d'une table principale (et pas de l'intérieur d'un popup), on remet l'historique à zéro
     if not st.session_state.get("from_popup_nav", False):
         st.session_state.popup_history = []
-    st.session_state.from_popup_nav = False  # Réinitialisation du trafic contrôleur
+    st.session_state.from_popup_nav = False
 
     popup_360(st.session_state.popup_entity_type, st.session_state.popup_entity_id, st.session_state.popup_entity_name)
     st.session_state.popup_entity_id = None
