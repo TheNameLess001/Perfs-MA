@@ -32,6 +32,8 @@ if "auth" not in st.session_state: st.session_state.auth = False
 if "popup_entity_id" not in st.session_state: st.session_state.popup_entity_id = None
 if "popup_entity_name" not in st.session_state: st.session_state.popup_entity_name = None
 if "popup_entity_type" not in st.session_state: st.session_state.popup_entity_type = None
+if "popup_history" not in st.session_state: st.session_state.popup_history = []
+if "from_popup_nav" not in st.session_state: st.session_state.from_popup_nav = False
 
 if not st.session_state.auth:
     st.title("🔒 Accès Sécurisé - Control Tower")
@@ -389,10 +391,26 @@ def is_new_selection(key, selection_rows):
     return curr != prev and len(curr) > 0
 
 # ==========================================
-# 5. POPUP 360° UNIVERSEL (REQUÊTE SUR DATASET COMPLET)
+# 5. POPUP 360° UNIVERSEL (REQUÊTE SUR DATASET COMPLET & NAVIGATION RETOUR)
 # ==========================================
 @st.dialog("🔍 Vue 360° Détaillée", width="large")
 def popup_360(entity_type, entity_id, entity_name):
+    # --- 0. BOUTON DE NAVIGATION "RETOUR EN ARRIÈRE" ---
+    if st.session_state.get("popup_history") and len(st.session_state.popup_history) > 0:
+        last_type, last_id, last_name = st.session_state.popup_history[-1]
+        icon = "🏙️" if last_type == 'City' else ("🏘️" if last_type == 'Area' else ("🍕" if last_type == 'Category' else ("📅" if last_type == 'Week' else "🏪")))
+        
+        col_bk1, col_bk2 = st.columns([2, 2])
+        with col_bk1:
+            if st.button(f"⬅️ Retour à : {icon} {last_name}", key=f"btn_back_{entity_id}_{len(st.session_state.popup_history)}"):
+                st.session_state.popup_history.pop()  # On retire le dernier élément de l'historique
+                st.session_state.from_popup_nav = True # Marqueur indiquant une navigation interne au popup
+                st.session_state.popup_entity_type = last_type
+                st.session_state.popup_entity_id = last_id
+                st.session_state.popup_entity_name = last_name
+                st.rerun()
+        st.markdown("---")
+
     max_global_date = df_merged_full['order day'].max()
     if pd.isna(max_global_date): 
         max_global_date = datetime.now()
@@ -630,7 +648,7 @@ def popup_360(entity_type, entity_id, entity_name):
             
         st.markdown("---")
 
-    # --- TOPS & FLOPS DANS POPUP (CLIQUABLES DEPUIS UN POPUP) ---
+    # --- TOPS & FLOPS DANS POPUP (ENREGISTREMENT DE L'HISTORIQUE AU CLIC) ---
     if entity_type in ['Week', 'City', 'Area', 'Category']:
         st.markdown(f"#### 📈 Tops & Flops ({entity_name}) - Volume de Commandes (🖱️ Cliquable)")
         resto_curr = compute_metrics(c_df, ['Restaurant ID', 'Restaurant Name'])
@@ -652,6 +670,11 @@ def popup_360(entity_type, entity_id, entity_name):
             )
             if is_new_selection(f"pop_top10_{note_id}", ev_t10.selection.rows):
                 r_idx = ev_t10.selection.rows[0]
+                # On mémorise l'entité actuelle dans l'historique avant d'ouvrir le restaurant
+                if "popup_history" not in st.session_state: st.session_state.popup_history = []
+                st.session_state.popup_history.append((entity_type, entity_id, entity_name))
+                st.session_state.from_popup_nav = True
+                
                 st.session_state.popup_entity_type = 'Restaurant'
                 st.session_state.popup_entity_id = top10_pop.iloc[r_idx]['Restaurant ID']
                 st.session_state.popup_entity_name = top10_pop.iloc[r_idx]['Restaurant Name']
@@ -671,6 +694,11 @@ def popup_360(entity_type, entity_id, entity_name):
             )
             if is_new_selection(f"pop_flop10_{note_id}", ev_f10.selection.rows):
                 r_idx = ev_f10.selection.rows[0]
+                # On mémorise l'entité actuelle dans l'historique avant d'ouvrir le restaurant
+                if "popup_history" not in st.session_state: st.session_state.popup_history = []
+                st.session_state.popup_history.append((entity_type, entity_id, entity_name))
+                st.session_state.from_popup_nav = True
+                
                 st.session_state.popup_entity_type = 'Restaurant'
                 st.session_state.popup_entity_id = flop10_pop.iloc[r_idx]['Restaurant ID']
                 st.session_state.popup_entity_name = flop10_pop.iloc[r_idx]['Restaurant Name']
@@ -732,7 +760,7 @@ def popup_360(entity_type, entity_id, entity_name):
                 except:
                     ws_pipe.append_row([str(entity_id), entity_name, nouveau_am])
                 st.success(f"Transféré à {nouveau_am} !")
-
+                
 # ==========================================
 # 6. ONGLETS ET AFFICHAGES VISUELS (100% CLIQUABLES)
 # ==========================================
@@ -1159,9 +1187,14 @@ with tabs[8]:
             st.session_state.popup_entity_name = disp_cat.iloc[ev_cat.selection.rows[0]]['Food Category']
 
 # ==========================================
-# GESTION SÉCURISÉE DU POPUP (FIN DU FICHIER)
+# GESTION SÉCURISÉE DU POPUP (AVEC NETTOYAGE AUTO DE L'HISTORIQUE)
 # ==========================================
 if st.session_state.get("popup_entity_id") is not None and st.session_state.get("popup_entity_type") is not None:
+    # Si le clic provient d'une table principale (et pas de l'intérieur d'un popup), on remet l'historique à zéro
+    if not st.session_state.get("from_popup_nav", False):
+        st.session_state.popup_history = []
+    st.session_state.from_popup_nav = False  # Réinitialisation du trafic contrôleur
+
     popup_360(st.session_state.popup_entity_type, st.session_state.popup_entity_id, st.session_state.popup_entity_name)
     st.session_state.popup_entity_id = None
     st.session_state.popup_entity_type = None
