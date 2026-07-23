@@ -1214,7 +1214,7 @@ with tabs[8]:
             st.session_state.popup_entity_name = disp_cat.iloc[ev_cat.selection.rows[0]]['Food Category']
 
 # ----------------------------------------
-# ONGLET 10 : BONUS & PRIMES (RÉSERVÉ NAJWA / ADMIN - AVEC PRORATA ≥ 80%)
+# ONGLET 10 : BONUS & PRIMES (RÉSERVÉ NAJWA / ADMIN - AVEC PRORATA ≥ 80% & SIMULATEUR Q2)
 # ----------------------------------------
 with tabs[9]:
     st.markdown("#### 💰 Calculateur de Primes Trimestrielles (Quarter over Quarter)")
@@ -1343,6 +1343,104 @@ with tabs[9]:
                 )
         else:
             st.info("Aucune donnée disponible pour le calcul des primes.")
+
+        # --- 3. SIMULATEUR PROVISOIRE Q2 (ANCIENNE ORG : VILLE & EXCLUSIONS KAM) ---
+        st.markdown("---")
+        st.markdown("#### 🛠️ Simulateur Provisoire Q2 (Ancienne Organisation : AM = Villes & Exclusions KAM)")
+        st.info("ℹ️ Ce simulateur permet d'évaluer la prime du 2ème trimestre (**Q2**) selon l'ancienne attribution par ville, en vous laissant exclure manuellement les grandes chaînes gérées par les KAM.")
+        
+        col_sim_conf, col_sim_res = st.columns([1, 2])
+        with col_sim_conf:
+            st.markdown("##### ⚙️ Configuration AM")
+            sim_am = st.selectbox("👤 Sélectionner l'AM :", ["Houda", "Chaima", "Najwa", "Imane", "Custom"], key="sim_q2_am")
+            
+            all_cities = sorted([str(c).strip() for c in df_merged_full['city'].dropna().unique() if str(c).strip() != 'nan'])
+            
+            # Presets de villes par défaut (entièrement modifiable dans le multiselect)
+            presets_am = {
+                "Houda": ["Casablanca", "Mohammedia"],
+                "Chaima": ["Rabat", "Salé", "Kenitra"],
+                "Najwa": ["Marrakech", "Agadir", "Tanger"],
+                "Imane": ["Fès", "Meknès", "Oujda"]
+            }
+            def_cities = [c for c in presets_am.get(sim_am, all_cities[:2]) if c in all_cities]
+            sim_cities = st.multiselect("🏙️ Villes assignées :", all_cities, default=def_cities if def_cities else all_cities, key="sim_q2_cities")
+            
+            # Détection automatique et sélection des grandes chaînes pour exclusion facile
+            restos_in_cities = sorted(df_merged_full[df_merged_full['city'].isin(sim_cities)]['Restaurant Name'].astype(str).unique()) if sim_cities else []
+            default_kam = [r for r in restos_in_cities if any(k in r.lower() for k in ['mcdo', 'kfc', 'burger king', 'pizza hut', 'domino', 'starbucks', 'carrefour', 'paul', 'baskin'])]
+            sim_excl_kam = st.multiselect("🏢 Chaînes / KAM à exclure :", restos_in_cities, default=default_kam, key="sim_q2_kam")
+            
+            all_quarters = sorted(df_merged_full['order day'].dt.year.astype(str) + "-Q" + df_merged_full['order day'].dt.quarter.astype(str).unique(), reverse=True)
+            def_q2 = next((q for q in all_quarters if "Q2" in q), all_quarters[0] if all_quarters else "2026-Q2")
+            sim_target_q = st.selectbox("🎯 Trimestre cible :", all_quarters, index=all_quarters.index(def_q2) if def_q2 in all_quarters else 0, key="sim_q2_target")
+
+        with col_sim_res:
+            st.markdown(f"##### 📊 Résultats Simulés pour **{sim_am}** ({sim_target_q})")
+            
+            if not sim_cities:
+                st.warning("⚠️ Veuillez sélectionner au moins une ville pour lancer la simulation.")
+            else:
+                df_prov = df_merged_full[
+                    (df_merged_full['city'].isin(sim_cities)) & 
+                    (~df_merged_full['Restaurant Name'].astype(str).isin(sim_excl_kam))
+                ].copy()
+                df_prov['Quarter'] = df_prov['order day'].dt.year.astype(str) + "-Q" + df_prov['order day'].dt.quarter.astype(str)
+                
+                q_prov = compute_metrics(df_prov, ['Quarter']).sort_values('Quarter', ascending=True)
+                
+                if not q_prov.empty:
+                    q_prov['GMV_prev'] = q_prov['GMV'].shift(1)
+                    q_prov['Growth GMV'] = (q_prov['GMV'] / q_prov['GMV_prev'].replace(0, np.nan) - 1).fillna(0)
+                    q_prov['Taux Cancel'] = (q_prov['CancelledByRestaurant'] / q_prov['Requested'].replace(0, np.nan)).fillna(0)
+                    q_prov['Taux Auto'] = (q_prov['Auto_Accepted'] / q_prov['Requested'].replace(0, np.nan)).fillna(0)
+                    
+                    q_prov['Att GMV'] = np.where(q_prov['GMV_prev'] > 0, np.clip(q_prov['Growth GMV'] / 0.30, 0, 1.0), 0)
+                    q_prov['Att Cancel'] = np.where(q_prov['Taux Cancel'] > 0, np.clip(0.03 / q_prov['Taux Cancel'], 0, 1.0), 1.0)
+                    q_prov['Att Cancel'] = np.where(q_prov['Requested'] > 0, q_prov['Att Cancel'], 0)
+                    q_prov['Att Auto'] = np.where(q_prov['Requested'] > 0, np.clip(q_prov['Taux Auto'] / 0.50, 0, 1.0), 0)
+                    
+                    q_prov['Prime GMV (DH)'] = np.where(q_prov['Att GMV'] >= 0.80, q_prov['Att GMV'] * 2000, 0)
+                    q_prov['Prime Cancel (DH)'] = np.where(q_prov['Att Cancel'] >= 0.80, q_prov['Att Cancel'] * 2000, 0)
+                    q_prov['Prime Auto (DH)'] = np.where(q_prov['Att Auto'] >= 0.80, q_prov['Att Auto'] * 2000, 0)
+                    q_prov['Total Prime (DH)'] = q_prov['Prime GMV (DH)'] + q_prov['Prime Cancel (DH)'] + q_prov['Prime Auto (DH)']
+                    
+                    if sim_target_q in q_prov['Quarter'].values:
+                        row_prov = q_prov[q_prov['Quarter'] == sim_target_q].iloc[0]
+                        
+                        p_q1, p_q2, p_q3 = st.columns(3)
+                        with p_q1:
+                            badge = "🟢" if row_prov['Att GMV'] == 1.0 else ("🟡" if row_prov['Att GMV'] >= 0.80 else "🔴")
+                            st.markdown(f"<div class='purple-box'><h3>Croissance GMV (≥30%)</h3><h2>{row_prov['Growth GMV']:+.1%}</h2><p>{badge} Att: {row_prov['Att GMV']:.0%} ➡️ <b>{row_prov['Prime GMV (DH)']:,.0f} DH</b></p></div>", unsafe_allow_html=True)
+                        with p_q2:
+                            badge = "🟢" if row_prov['Att Cancel'] == 1.0 else ("🟡" if row_prov['Att Cancel'] >= 0.80 else "🔴")
+                            st.markdown(f"<div class='purple-box'><h3>Cancel Resto (≤3%)</h3><h2>{row_prov['Taux Cancel']:.1%}</h2><p>{badge} Att: {row_prov['Att Cancel']:.0%} ➡️ <b>{row_prov['Prime Cancel (DH)']:,.0f} DH</b></p></div>", unsafe_allow_html=True)
+                        with p_q3:
+                            badge = "🟢" if row_prov['Att Auto'] == 1.0 else ("🟡" if row_prov['Att Auto'] >= 0.80 else "🔴")
+                            st.markdown(f"<div class='purple-box'><h3>Automation (≥50%)</h3><h2>{row_prov['Taux Auto']:.1%}</h2><p>{badge} Att: {row_prov['Att Auto']:.0%} ➡️ <b>{row_prov['Prime Auto (DH)']:,.0f} DH</b></p></div>", unsafe_allow_html=True)
+                        
+                        st.success(f"💰 **Prime Totale Simulée ({sim_am} - {sim_target_q}) : {row_prov['Total Prime (DH)']:,.0f} DH** sur un plafond de 6 000 DH.")
+                    else:
+                        st.info(f"Le trimestre {sim_target_q} n'a pas encore de données dans cette configuration.")
+                        
+                    # Tableau récapitulatif
+                    disp_sim = q_prov.sort_values('Quarter', ascending=False).copy()
+                    disp_sim['Croissance GMV'] = disp_sim.apply(lambda r: f"{r['Growth GMV']:+.1%} (Att: {r['Att GMV']:.0%} ➡️ {r['Prime GMV (DH)']:,.0f} DH)", axis=1)
+                    disp_sim['Annulations Resto'] = disp_sim.apply(lambda r: f"{r['Taux Cancel']:.1%} (Att: {r['Att Cancel']:.0%} ➡️ {r['Prime Cancel (DH)']:,.0f} DH)", axis=1)
+                    disp_sim['Automation'] = disp_sim.apply(lambda r: f"{r['Taux Auto']:.1%} (Att: {r['Att Auto']:.0%} ➡️ {r['Prime Auto (DH)']:,.0f} DH)", axis=1)
+                    
+                    st.dataframe(
+                        disp_sim[['Quarter', 'Requested', 'GMV', 'Croissance GMV', 'Annulations Resto', 'Automation', 'Total Prime (DH)']].style.format({
+                            'Requested': '{:,.0f}',
+                            'GMV': '{:,.0f} MAD',
+                            'Total Prime (DH)': '💰 {:,.0f} DH'
+                        }),
+                        hide_index=True,
+                        use_container_width=True
+                    )
+                else:
+                    st.info("Aucune commande trouvée pour ces villes après exclusion des KAM.")
+
 
 # ==========================================
 # GESTION SÉCURISÉE DU POPUP (FIN DU FICHIER)
