@@ -8,7 +8,7 @@ import io
 import gspread
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
+from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
 # ==========================================
 # 1. CONFIGURATION DE LA PAGE & LOGIN
@@ -82,16 +82,27 @@ def load_crm_data():
 
 df_pipeline_master, df_notes_master, crm_sheet = load_crm_data()
 
+# --- RECHERCHE DRIVE INTELLIGENTE (FICHIERS HEBDOS + MASTER) ---
 @st.cache_data(ttl=300)
-def get_data_files():
-    results = drive_service.files().list(q="mimeType='text/csv'", fields="files(id, name)").execute()
+def get_drive_files():
+    results = drive_service.files().list(
+        q="mimeType='text/csv' and trashed = false", 
+        fields="files(id, name, parents)"
+    ).execute()
+    
     data_files = []
+    master_file = None
+    
     for f in results.get('files', []):
-        if re.search(r'data week (\d+)_(\d{4})\.csv', f['name'], re.IGNORECASE): data_files.append(f)
-    return data_files
+        if f['name'] == 'master_consolidated.csv':
+            master_file = f
+        elif re.search(r'data week (\d+)_(\d{4})\.csv', f['name'], re.IGNORECASE): 
+            data_files.append(f)
+            
+    return data_files, master_file
 
-fichiers_disponibles = get_data_files()
-if not fichiers_disponibles:
+fichiers_disponibles, master_file_info = get_drive_files()
+if not fichiers_disponibles and not master_file_info:
     st.warning("⚠️ Aucun fichier trouvé sur Drive.")
     st.stop()
 
@@ -104,12 +115,10 @@ def clean_id_series(s):
         return s
     return s.astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
 
-# --- CHARGEMENT UNIVERSEL ET ULTRA-ROBUSTE DE RST_list ---
+# --- CHARGEMENT ROBUSTE DE RST_list ---
 @st.cache_data(ttl=600)
 def load_rst_list_master():
     df_rst = pd.DataFrame()
-
-    # 1. Essai principal via Google Sheets natif (gspread)
     try:
         sheet_rst = gc.open("RST_list")
         records = sheet_rst.sheet1.get_all_records()
@@ -117,7 +126,6 @@ def load_rst_list_master():
     except Exception:
         df_rst = pd.DataFrame()
 
-    # 2. Secours via l'API Google Drive (si RST_list.csv)
     if df_rst.empty:
         try:
             results = drive_service.files().list(
@@ -125,89 +133,117 @@ def load_rst_list_master():
                 fields="files(id, name, mimeType)"
             ).execute()
             files = results.get('files', [])
-
             if files:
-                file_id = files[0]['id']
-                req = drive_service.files().get_media(fileId=file_id)
+                req = drive_service.files().get_media(fileId=files[0]['id'])
                 fh = io.BytesIO()
                 downloader = MediaIoBaseDownload(fh, req)
                 done = False
-                while not done:
-                    _, done = downloader.next_chunk()
+                while not done: _, done = downloader.next_chunk()
                 fh.seek(0)
-
                 try:
                     df_rst = pd.read_csv(fh, sep=";", dtype=str)
                     if df_rst.shape[1] <= 2:
-                        fh.seek(0)
-                        df_rst = pd.read_csv(fh, sep=",", dtype=str)
+                        fh.seek(0); df_rst = pd.read_csv(fh, sep=",", dtype=str)
                 except Exception:
-                    fh.seek(0)
-                    df_rst = pd.read_csv(fh, sep=",", dtype=str)
+                    fh.seek(0); df_rst = pd.read_csv(fh, sep=",", dtype=str)
         except Exception:
             df_rst = pd.DataFrame()
 
-    # 3. Secours via le fichier CSV local en dernier recours
     if df_rst.empty:
-        try:
-            df_rst = pd.read_csv("restaurant-export-2026-05-15.csv", sep=";", dtype=str)
-        except Exception:
-            df_rst = pd.DataFrame()
+        try: df_rst = pd.read_csv("restaurant-export-2026-05-15.csv", sep=";", dtype=str)
+        except Exception: df_rst = pd.DataFrame()
 
-    # Nettoyage et harmonisation automatique des colonnes
     if not df_rst.empty:
         df_rst.columns = [str(c).strip() for c in df_rst.columns]
-        
         col_id = next((c for c in df_rst.columns if "restaurant id" in c.lower() or c.lower() == "id"), None)
         if col_id:
             df_rst.rename(columns={col_id: 'Restaurant ID'}, inplace=True)
             df_rst['Restaurant ID'] = clean_id_series(df_rst['Restaurant ID'])
-            
         col_name = next((c for c in df_rst.columns if "restaurant name" in c.lower()), None)
         if col_name and col_name != 'Restaurant Name':
             df_rst.rename(columns={col_name: 'Restaurant Name'}, inplace=True)
-
-        if 'Main City' in df_rst.columns:
-            df_rst['Main City'] = df_rst['Main City'].astype(str).str.strip()
-        if 'Sub City' in df_rst.columns:
-            df_rst['Sub City'] = df_rst['Sub City'].astype(str).str.strip()
-
+        if 'Main City' in df_rst.columns: df_rst['Main City'] = df_rst['Main City'].astype(str).str.strip()
+        if 'Sub City' in df_rst.columns: df_rst['Sub City'] = df_rst['Sub City'].astype(str).str.strip()
     return df_rst
 
 df_rst_master = load_rst_list_master()
 
-@st.cache_data(show_spinner=False)
-def load_all_drive_csvs(files):
-    dfs = []
-    for f in files:
-        req = drive_service.files().get_media(fileId=f['id'])
+# --- FONCTION UNITAIRE DE TÉLÉCHARGEMENT ---
+def download_single_csv(file_info, add_source=True):
+    try:
+        req = drive_service.files().get_media(fileId=file_info['id'])
         fh = io.BytesIO()
         downloader = MediaIoBaseDownload(fh, req)
         done = False
-        while not done: 
-            _, done = downloader.next_chunk()
+        while not done: _, done = downloader.next_chunk()
         fh.seek(0)
-        
-        try:
-            df = pd.read_csv(fh)
-            if not df.empty:
-                if "restaurant name" in df.columns: 
-                    df.rename(columns={"restaurant name": "Restaurant Name"}, inplace=True)
-                dfs.append(df)
-        except pd.errors.EmptyDataError:
-            pass
+        df = pd.read_csv(fh, low_memory=False)
+        if not df.empty:
+            if "restaurant name" in df.columns: 
+                df.rename(columns={"restaurant name": "Restaurant Name"}, inplace=True)
+            if add_source:
+                df['source_file'] = file_info['name']
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+# --- MOTEUR ETL INCRÉMENTAL AVEC MASTER DRIVE ---
+@st.cache_data(show_spinner=False)
+def load_and_consolidate_history(data_files, master_file):
+    df_master = pd.DataFrame()
+    fichiers_deja_merges = set()
+    
+    if master_file:
+        df_master = download_single_csv(master_file, add_source=False)
+        if not df_master.empty and 'source_file' in df_master.columns:
+            fichiers_deja_merges = set(df_master['source_file'].unique())
             
-    return pd.concat(dfs, ignore_index=True).drop_duplicates(subset=['order id']) if dfs else pd.DataFrame()
+    nouveaux_fichiers = [f for f in data_files if f['name'] not in fichiers_deja_merges]
+    
+    if len(nouveaux_fichiers) == 0 and not df_master.empty:
+        return df_master
+        
+    nouveaux_dfs = []
+    for f in nouveaux_fichiers:
+        df_temp = download_single_csv(f, add_source=True)
+        if not df_temp.empty: nouveaux_dfs.append(df_temp)
+            
+    if not nouveaux_dfs and not df_master.empty: return df_master
+    elif not nouveaux_dfs and df_master.empty: return pd.DataFrame()
+        
+    dfs_to_concat = [df_master] + nouveaux_dfs if not df_master.empty else nouveaux_dfs
+    df_final = pd.concat(dfs_to_concat, ignore_index=True)
+    if 'order id' in df_final.columns:
+        df_final = df_final.drop_duplicates(subset=['order id'], keep='last')
+        
+    try:
+        csv_buffer = io.BytesIO()
+        df_final.to_csv(csv_buffer, index=False, encoding='utf-8')
+        csv_buffer.seek(0)
+        media = MediaIoBaseUpload(csv_buffer, mimetype='text/csv', resumable=True)
+        
+        if master_file:
+            drive_service.files().update(fileId=master_file['id'], media_body=media).execute()
+        else:
+            file_metadata = {'name': 'master_consolidated.csv'}
+            if data_files and 'parents' in data_files[0]:
+                file_metadata['parents'] = [data_files[0]['parents'][0]]
+            drive_service.files().create(body=file_metadata, media_body=media).execute()
+    except Exception:
+        pass
+        
+    return df_final
 
 col_am, col_info = st.columns([1, 2])
 with col_am: am_choisi = st.selectbox("🎯 Sélection de la Pipeline", ["Global", "Houda", "Chaima", "Najwa", "Imane"])
-with col_info: st.info(f"🔄 Fusion automatique activée ({len(fichiers_disponibles)} fichiers d'historique consolidés)")
+with col_info: 
+    msg_mode = f"⚡ Master Drive Actif ({len(fichiers_disponibles)} semaines)" if master_file_info else f"🔄 Construction Master Drive en cours..."
+    st.info(f"{msg_mode} | Consolidation intelligente")
 
 try:
-    with st.spinner("Aspiration et fusion de tout l'historique en cours..."):
-        df_merged_full = load_all_drive_csvs(fichiers_disponibles)
+    with st.spinner("Vérification incrémentale de l'historique sur Drive..."):
+        df_merged_full = load_and_consolidate_history(fichiers_disponibles, master_file_info)
         
-        # --- NETTOYAGE HARMONISÉ DE TOUTES LES SOURCES ---
         if not df_pipeline_master.empty and 'Restaurant ID' in df_pipeline_master.columns:
             df_pipeline_master['Restaurant ID'] = clean_id_series(df_pipeline_master['Restaurant ID'])
 
@@ -215,7 +251,6 @@ try:
             df_merged_full['Restaurant ID'] = clean_id_series(df_merged_full['Restaurant ID'])
             df_merged_full = df_merged_full[df_merged_full['Restaurant ID'] != 'nan']
 
-        # Consolidation intégrale des noms (Priorité : RST_list > CRM > CSV)
         cols_id_name = ['Restaurant ID', 'Restaurant Name']
         l_rst = df_rst_master[cols_id_name].dropna(subset=['Restaurant ID']) if (not df_rst_master.empty and all(c in df_rst_master.columns for c in cols_id_name)) else pd.DataFrame(columns=cols_id_name)
         l_crm = df_pipeline_master[cols_id_name].dropna(subset=['Restaurant ID']) if not df_pipeline_master.empty else pd.DataFrame(columns=cols_id_name)
@@ -224,34 +259,27 @@ try:
         master_restos = pd.concat([l_rst, l_crm, l_csv], ignore_index=True).drop_duplicates(subset=['Restaurant ID'], keep='first')
 
         if am_choisi != "Global":
-            # Filtrage strict sur la pipeline d'un AM
             df_pipe_am = df_pipeline_master[df_pipeline_master['AM_Name'].astype(str).str.lower() == am_choisi.lower()]
             am_ids = df_pipe_am['Restaurant ID'].unique()
             liste_attendue = master_restos[master_restos['Restaurant ID'].isin(am_ids)].copy()
             df_merged = df_merged_full[df_merged_full['Restaurant ID'].isin(am_ids)].copy()
         else:
-            # 💡 MODE GLOBAL : 100% DES RESTAURANTS DE TOUTES LES SOURCES !
             liste_attendue = master_restos.copy()
             df_merged = df_merged_full.copy()
 
-        # Exclusion des restaurants de test
         pattern_exclus = '|'.join(['test', 'restau fixe', 'restau avance'])
         df_merged = df_merged[~df_merged['Restaurant Name'].astype(str).str.contains(pattern_exclus, case=False, na=False)]
         liste_attendue = liste_attendue[~liste_attendue['Restaurant Name'].astype(str).str.contains(pattern_exclus, case=False, na=False)]
 
         try: 
             df_caisse = pd.read_csv("CaisseMA.csv", sep=None, engine='python')
-            if 'Restaurant ID' in df_caisse.columns:
-                df_caisse['Restaurant ID'] = clean_id_series(df_caisse['Restaurant ID'])
-        except: 
-            df_caisse = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name'])
+            if 'Restaurant ID' in df_caisse.columns: df_caisse['Restaurant ID'] = clean_id_series(df_caisse['Restaurant ID'])
+        except: df_caisse = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name'])
             
         try: 
             df_new = pd.read_csv("NewRestaurants.csv", sep=None, engine='python')
-            if 'Restaurant ID' in df_new.columns:
-                df_new['Restaurant ID'] = clean_id_series(df_new['Restaurant ID'])
-        except: 
-            df_new = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name'])
+            if 'Restaurant ID' in df_new.columns: df_new['Restaurant ID'] = clean_id_series(df_new['Restaurant ID'])
+        except: df_new = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name'])
 
         df_merged_full['order day'] = pd.to_datetime(df_merged_full['order day'])
         df_merged_full['Week'] = "Week " + df_merged_full['order day'].dt.isocalendar().week.astype(str).str.zfill(2)
@@ -304,7 +332,6 @@ def compute_metrics(df_subset, group_cols):
 
     res = df_subset.groupby(group_cols).agg(**agg_dict).reset_index()
 
-    # FORCE LA CONVERSION EN FLOAT/INT NUMÉRIQUE STANDARD (CORRECTION FIX PYARROW)
     num_cols = ['Requested', 'Delivered', 'Auto_Accepted', 'CancelledByRestaurant', 'GMV', 'CA', 'Commission', 'Promo_Restaurant', 'Promo_Admin', 'LR_LG_Costs']
     for c in num_cols:
         if c in res.columns:
@@ -389,7 +416,7 @@ def is_new_selection(key, selection_rows):
     curr = selection_rows if selection_rows else []
     st.session_state[prev_key] = curr
     return curr != prev and len(curr) > 0
-
+    
 # ==========================================
 # 5. POPUP 360° UNIVERSEL (REQUÊTE SUR DATASET COMPLET & NAVIGATION RETOUR)
 # ==========================================
