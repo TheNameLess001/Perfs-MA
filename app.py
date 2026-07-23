@@ -50,7 +50,6 @@ if not st.session_state.auth:
     st.stop()
 
 st.title(f"📊 Control Tower CRM - Bonjour {st.session_state.user}")
-st.markdown("---")
 
 # ==========================================
 # 2. CONNEXIONS (DRIVE & SHEETS)
@@ -177,7 +176,6 @@ def load_old_pipeline_master():
         records = sheet_old.sheet1.get_all_records()
         df_old = pd.DataFrame(records)
     except Exception:
-        # Secours API Drive si c'est un CSV
         try:
             results = drive_service.files().list(
                 q="name = 'Old_Pipeline.csv' or name = 'Old_Pipeline' or name contains 'Old_Pipeline'",
@@ -203,7 +201,6 @@ def load_old_pipeline_master():
         df_old.columns = [str(c).strip() for c in df_old.columns]
         cols = df_old.columns.tolist()
         if len(cols) >= 2:
-            # Colonne A = Restaurant ID, Colonne B = AM_Name_Old
             df_old.rename(columns={cols[0]: 'Restaurant ID', cols[1]: 'AM_Name_Old'}, inplace=True)
             df_old['Restaurant ID'] = clean_id_series(df_old['Restaurant ID'])
             df_old['AM_Name_Old'] = df_old['AM_Name_Old'].astype(str).str.strip()
@@ -277,12 +274,6 @@ def load_and_consolidate_history(data_files, master_file):
         
     return df_final
 
-col_am, col_info = st.columns([1, 2])
-with col_am: am_choisi = st.selectbox("🎯 Sélection de la Pipeline", ["Global", "Houda", "Chaima", "Najwa", "Imane"])
-with col_info: 
-    msg_mode = f"⚡ Master Drive Actif ({len(fichiers_disponibles)} semaines)" if master_file_info else f"🔄 Construction Master Drive en cours..."
-    st.info(f"{msg_mode} | Consolidation intelligente")
-
 try:
     with st.spinner("Vérification incrémentale de l'historique sur Drive..."):
         df_merged_full = load_and_consolidate_history(fichiers_disponibles, master_file_info)
@@ -294,6 +285,10 @@ try:
             df_merged_full['Restaurant ID'] = clean_id_series(df_merged_full['Restaurant ID'])
             df_merged_full = df_merged_full[df_merged_full['Restaurant ID'] != 'nan']
 
+        df_merged_full['order day'] = pd.to_datetime(df_merged_full['order day'])
+        df_merged_full['Week'] = "Week " + df_merged_full['order day'].dt.isocalendar().week.astype(str).str.zfill(2)
+        df_merged_full['Month'] = df_merged_full['order day'].dt.strftime('%Y-%m')
+
         cols_id_name = ['Restaurant ID', 'Restaurant Name']
         l_rst = df_rst_master[cols_id_name].dropna(subset=['Restaurant ID']) if (not df_rst_master.empty and all(c in df_rst_master.columns for c in cols_id_name)) else pd.DataFrame(columns=cols_id_name)
         l_crm = df_pipeline_master[cols_id_name].dropna(subset=['Restaurant ID']) if not df_pipeline_master.empty else pd.DataFrame(columns=cols_id_name)
@@ -301,48 +296,72 @@ try:
 
         master_restos = pd.concat([l_rst, l_crm, l_csv], ignore_index=True).drop_duplicates(subset=['Restaurant ID'], keep='first')
 
-        if am_choisi != "Global":
-            df_pipe_am = df_pipeline_master[df_pipeline_master['AM_Name'].astype(str).str.lower() == am_choisi.lower()]
-            am_ids = df_pipe_am['Restaurant ID'].unique()
-            liste_attendue = master_restos[master_restos['Restaurant ID'].isin(am_ids)].copy()
-            df_merged = df_merged_full[df_merged_full['Restaurant ID'].isin(am_ids)].copy()
-        else:
-            liste_attendue = master_restos.copy()
-            df_merged = df_merged_full.copy()
-
-        pattern_exclus = '|'.join(['test', 'restau fixe', 'restau avance'])
-        df_merged = df_merged[~df_merged['Restaurant Name'].astype(str).str.contains(pattern_exclus, case=False, na=False)]
-        liste_attendue = liste_attendue[~liste_attendue['Restaurant Name'].astype(str).str.contains(pattern_exclus, case=False, na=False)]
-
-        try: 
-            df_caisse = pd.read_csv("CaisseMA.csv", sep=None, engine='python')
-            if 'Restaurant ID' in df_caisse.columns: df_caisse['Restaurant ID'] = clean_id_series(df_caisse['Restaurant ID'])
-        except: df_caisse = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name'])
-            
-        try: 
-            df_new = pd.read_csv("NewRestaurants.csv", sep=None, engine='python')
-            if 'Restaurant ID' in df_new.columns: df_new['Restaurant ID'] = clean_id_series(df_new['Restaurant ID'])
-        except: df_new = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name'])
-
-        df_merged_full['order day'] = pd.to_datetime(df_merged_full['order day'])
-        df_merged_full['Week'] = "Week " + df_merged_full['order day'].dt.isocalendar().week.astype(str).str.zfill(2)
-
-        df_merged['order day'] = pd.to_datetime(df_merged['order day'])
-        df_merged['Week'] = "Week " + df_merged['order day'].dt.isocalendar().week.astype(str).str.zfill(2)
-        semaines_dispos = sorted(df_merged_full['Week'].unique(), reverse=True)
-
 except Exception as e:
     st.error(f"❌ Erreur critique lors de la fusion : {e}")
     st.stop()
 
-with st.sidebar:
-    st.markdown("### 📅 Filtres Temporels")
-    semaine_selectionnee = st.selectbox("Semaine principale", semaines_dispos)
-    try: semaine_precedente = semaines_dispos[semaines_dispos.index(semaine_selectionnee) + 1]
-    except: semaine_precedente = None
-    st.markdown("---")
-    st.success(f"**Périmètre :** {am_choisi}")
-    st.info(f"**Commandes totales (Historique) :** {len(df_merged):,}")
+# ==========================================
+# BANDEAU DE CONTRÔLE SUPÉRIEUR (TOP BAR)
+# ==========================================
+st.markdown("---")
+col_time_mode, col_time_sel, col_am_sel, col_stats = st.columns([1.5, 2, 1.5, 2])
+
+with col_time_mode:
+    mode_temporel = st.radio("⏳ Vue Temporelle :", ["📊 Par Semaine", "🗓️ Par Mois"], horizontal=True, key="top_time_mode")
+
+with col_time_sel:
+    if mode_temporel == "📊 Par Semaine":
+        periodes_dispos = sorted([str(w) for w in df_merged_full['Week'].dropna().unique() if pd.notnull(w) and str(w).strip() not in ['nan', '', 'None', '<NA>']], reverse=True)
+        label_select = "📅 Semaine principale"
+        col_temps = 'Week'
+        label_evo_global = "WoW"
+    else:
+        periodes_dispos = sorted([str(m) for m in df_merged_full['Month'].dropna().unique() if pd.notnull(m) and str(m).strip() not in ['nan', '', 'None', '<NA>']], reverse=True)
+        label_select = "🗓️ Mois principal"
+        col_temps = 'Month'
+        label_evo_global = "MoM"
+        
+    periode_selectionnee = st.selectbox(label_select, periodes_dispos, key="top_time_select")
+    try: 
+        periode_precedente = periodes_dispos[periodes_dispos.index(periode_selectionnee) + 1]
+    except: 
+        periode_precedente = None
+        
+    semaine_selectionnee = periode_selectionnee
+    semaine_precedente = periode_precedente
+
+with col_am_sel:
+    am_choisi = st.selectbox("🎯 Pipeline / AM :", ["Global", "Houda", "Chaima", "Najwa", "Imane"], key="top_am_select")
+
+# Filtrage du périmètre AM après sélection du bandeau
+if am_choisi != "Global":
+    df_pipe_am = df_pipeline_master[df_pipeline_master['AM_Name'].astype(str).str.lower() == am_choisi.lower()]
+    am_ids = df_pipe_am['Restaurant ID'].unique()
+    liste_attendue = master_restos[master_restos['Restaurant ID'].isin(am_ids)].copy()
+    df_merged = df_merged_full[df_merged_full['Restaurant ID'].isin(am_ids)].copy()
+else:
+    liste_attendue = master_restos.copy()
+    df_merged = df_merged_full.copy()
+
+pattern_exclus = '|'.join(['test', 'restau fixe', 'restau avance'])
+df_merged = df_merged[~df_merged['Restaurant Name'].astype(str).str.contains(pattern_exclus, case=False, na=False)]
+liste_attendue = liste_attendue[~liste_attendue['Restaurant Name'].astype(str).str.contains(pattern_exclus, case=False, na=False)]
+
+try: 
+    df_caisse = pd.read_csv("CaisseMA.csv", sep=None, engine='python')
+    if 'Restaurant ID' in df_caisse.columns: df_caisse['Restaurant ID'] = clean_id_series(df_caisse['Restaurant ID'])
+except: df_caisse = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name'])
+    
+try: 
+    df_new = pd.read_csv("NewRestaurants.csv", sep=None, engine='python')
+    if 'Restaurant ID' in df_new.columns: df_new['Restaurant ID'] = clean_id_series(df_new['Restaurant ID'])
+except: df_new = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name'])
+
+with col_stats:
+    msg_mode = f"⚡ Master Drive ({len(fichiers_disponibles)} fichiers)" if 'master_file_info' in globals() and master_file_info else "🔄 Consolidation active"
+    st.info(f"**Périmètre :** {am_choisi} | **Total Cmds :** {len(df_merged):,}\n{msg_mode}")
+
+st.markdown("---")
 
 # ==========================================
 # 4. MOTEUR DE CALCULS & PROTECTION ZERO (CORRIGÉ & ROBUSTE)
@@ -428,8 +447,9 @@ def compare_wow(df_curr, df_prev, merge_on):
         df_comp['Tier'] = "N/A"
     return df_comp
 
-df_current = df_merged[df_merged['Week'] == semaine_selectionnee].copy()
-df_prev = df_merged[df_merged['Week'] == semaine_precedente] if semaine_precedente else pd.DataFrame(columns=df_merged.columns)
+# MOTEUR TEMPOREL DYNAMIQUE (ADAPTÉ AU CHOIX SEMAINE OU MOIS)
+df_current = df_merged[df_merged[col_temps] == periode_selectionnee].copy()
+df_prev = df_merged[df_merged[col_temps] == periode_precedente] if periode_precedente else pd.DataFrame(columns=df_merged.columns)
 
 def get_metrics_with_zeroes(df_subset, expected_base):
     metrics = compute_metrics(df_subset, ['Restaurant ID'])
@@ -461,20 +481,19 @@ def is_new_selection(key, selection_rows):
     return curr != prev and len(curr) > 0
     
 # ==========================================
-# 5. POPUP 360° UNIVERSEL (REQUÊTE SUR DATASET COMPLET & NAVIGATION RETOUR)
+# 5. POPUP 360° UNIVERSEL (COMPATIBLE SEMAINE & MOIS + NAVIGATION RETOUR)
 # ==========================================
 @st.dialog("🔍 Vue 360° Détaillée", width="large")
 def popup_360(entity_type, entity_id, entity_name):
-    # --- 0. BOUTON DE NAVIGATION "RETOUR EN ARRIÈRE" ---
     if st.session_state.get("popup_history") and len(st.session_state.popup_history) > 0:
         last_type, last_id, last_name = st.session_state.popup_history[-1]
-        icon = "🏙️" if last_type == 'City' else ("🏘️" if last_type == 'Area' else ("🍕" if last_type == 'Category' else ("📅" if last_type == 'Week' else "🏪")))
+        icon = "🏙️" if last_type == 'City' else ("🏘️" if last_type == 'Area' else ("🍕" if last_type == 'Category' else ("📅" if last_type in ['Week', 'Period', 'Month'] else "🏪")))
         
         col_bk1, col_bk2 = st.columns([2, 2])
         with col_bk1:
             if st.button(f"⬅️ Retour à : {icon} {last_name}", key=f"btn_back_{entity_id}_{len(st.session_state.popup_history)}"):
-                st.session_state.popup_history.pop()  # On retire le dernier élément de l'historique
-                st.session_state.from_popup_nav = True # Marqueur indiquant une navigation interne au popup
+                st.session_state.popup_history.pop()
+                st.session_state.from_popup_nav = True
                 st.session_state.popup_entity_type = last_type
                 st.session_state.popup_entity_id = last_id
                 st.session_state.popup_entity_name = last_name
@@ -496,9 +515,9 @@ def popup_360(entity_type, entity_id, entity_name):
     elif entity_type == 'Item':
         df_r = df_merged_full[df_merged_full['Food Item'].astype(str).str.contains(str(entity_id), regex=False, na=False)].sort_values('order day')
         note_id = f"Item_{entity_id}"
-    elif entity_type == 'Week':
+    elif entity_type in ['Week', 'Period', 'Month']:
         df_r = df_merged_full.sort_values('order day')
-        note_id = f"Week_{entity_id}"
+        note_id = f"Time_{entity_id}"
     elif entity_type == 'City':
         df_r = df_merged_full[df_merged_full['city'].astype(str).str.strip().str.lower() == clean_entity_id].sort_values('order day')
         note_id = f"City_{entity_id}"
@@ -508,7 +527,6 @@ def popup_360(entity_type, entity_id, entity_name):
 
     st.markdown(f"### {'🏪' if entity_type == 'Restaurant' else '📊'} {entity_name}")
     
-    # --- CARTOUCHE D'INFO (RESTAURANT) ---
     if entity_type == 'Restaurant':
         if not df_rst_master.empty:
             rst_info = df_rst_master[df_rst_master['Restaurant ID'].astype(str).str.strip().str.lower() == clean_entity_id]
@@ -533,34 +551,38 @@ def popup_360(entity_type, entity_id, entity_name):
                     f"* 💰 **Commission Contractuelle :** {c_comm}%\n"
                     f"* 🏪 **Format :** {c_type.capitalize()} | 📞 **Tél :** {c_phone} | ✉️ **Email :** {c_email}"
                 )
-            else:
-                st.warning("⚠️ Restaurant présent dans l'historique mais non référencé dans RST_list.")
-        else:
-            st.warning("⚠️ Référentiel RST_list introuvable.")
 
-    # --- FILTRES TEMPORELS ---
     col_filtre, col_btn = st.columns([2, 1])
-    if entity_type == 'Week':
+    if entity_type in ['Week', 'Period', 'Month']:
         with col_filtre: 
-            st.info(f"Analyse figée sur la {entity_name}")
-        c_df = df_r[df_r['Week'] == entity_id]
-        weeks_list = sorted(df_merged_full['Week'].unique(), reverse=True)
+            st.info(f"Analyse figée sur : {entity_name}")
+        if "Week" in str(entity_id):
+            col_t_pop = 'Week'
+            label_evo = "WoW"
+        elif len(str(entity_id)) == 7 and "-" in str(entity_id):
+            col_t_pop = 'Month'
+            label_evo = "MoM"
+        else:
+            col_t_pop = 'Week'
+            label_evo = "WoW"
+            
+        c_df = df_r[df_r[col_t_pop] == entity_id]
+        time_list = sorted([str(t) for t in df_merged_full[col_t_pop].dropna().unique() if pd.notnull(t) and str(t) != 'nan'], reverse=True)
         try: 
-            p_week = weeks_list[weeks_list.index(entity_id) + 1]
+            p_time = time_list[time_list.index(str(entity_id)) + 1]
         except: 
-            p_week = None
-        p_df = df_r[df_r['Week'] == p_week] if p_week else pd.DataFrame(columns=df_r.columns)
-        label_evo = "WoW"
+            p_time = None
+        p_df = df_r[df_r[col_t_pop] == p_time] if p_time else pd.DataFrame(columns=df_r.columns)
         choix_periode = entity_name
     else:
         with col_filtre:
-            choix_periode = st.radio("Filtre d'analyse :", ["WoW (Semaine Active)", "MoM (30 Derniers Jours)", "Historique Complet"], horizontal=True, key=f"radio_pop_{note_id}")
+            choix_periode = st.radio("Filtre d'analyse :", [f"{label_evo_global} (Période Active : {periode_selectionnee})", "MoM (30 Derniers Jours)", "Historique Complet"], horizontal=True, key=f"radio_pop_{note_id}")
         
-        if choix_periode == "WoW (Semaine Active)":
-            c_df = df_r[df_r['Week'] == semaine_selectionnee]
-            p_df = df_r[df_r['Week'] == semaine_precedente] if semaine_precedente else pd.DataFrame(columns=df_r.columns)
-            label_evo = "WoW"
-        elif choix_periode == "MoM (30 Derniers Jours)":
+        if choix_periode.startswith("WoW") or choix_periode.startswith("MoM (Période") or "Période Active" in choix_periode:
+            c_df = df_r[df_r[col_temps] == periode_selectionnee]
+            p_df = df_r[df_r[col_temps] == periode_precedente] if periode_precedente else pd.DataFrame(columns=df_r.columns)
+            label_evo = label_evo_global
+        elif "30 Derniers Jours" in choix_periode:
             c_df = df_r[df_r['order day'] >= max_global_date - timedelta(days=30)]
             p_df = df_r[(df_r['order day'] >= max_global_date - timedelta(days=60)) & (df_r['order day'] < max_global_date - timedelta(days=30))]
             label_evo = "MoM"
@@ -569,7 +591,6 @@ def popup_360(entity_type, entity_id, entity_name):
             p_df = pd.DataFrame(columns=df_r.columns)
             label_evo = "Global"
 
-    # --- CALCUL DES KPIS GLOBAUX ---
     def calc_kpis(df):
         req = len(df)
         df_deliv = df[df['status'] == 'Delivered'].copy() if 'status' in df.columns else pd.DataFrame()
@@ -620,7 +641,6 @@ def popup_360(entity_type, entity_id, entity_name):
 
     st.markdown("---")
     
-    # --- BOXES VIOLETTES ---
     b1, b2, b3 = st.columns(3)
     with b1: st.markdown(f"<div class='purple-box'><h3>Commandes Reçues</h3><h2>{c_req}</h2><p>{label_evo}: {format_evo(c_req, p_req)}</p></div>", unsafe_allow_html=True)
     with b2: st.markdown(f"<div class='purple-box'><h3>Commandes Livrées</h3><h2>{c_del}</h2><p>{label_evo}: {format_evo(c_del, p_del)}</p></div>", unsafe_allow_html=True)
@@ -640,8 +660,7 @@ def popup_360(entity_type, entity_id, entity_name):
 
     st.markdown("---")
 
-    # --- TABLEAU D'IMPACT AM ---
-    if entity_type in ['City', 'Area', 'Category', 'Week']:
+    if entity_type in ['City', 'Area', 'Category', 'Week', 'Period', 'Month']:
         st.markdown(f"#### 👥 Impact par Pipeline / AM ({entity_name})")
         
         pipe_ref = df_pipeline_master[['Restaurant ID', 'AM_Name']].drop_duplicates(subset=['Restaurant ID']) if not df_pipeline_master.empty else pd.DataFrame(columns=['Restaurant ID', 'AM_Name'])
@@ -698,7 +717,7 @@ def popup_360(entity_type, entity_id, entity_name):
                 ['AM_Name', 'Req', 'Delivered', 'Part Req', 'Success Rate', 'WoW Req', 'Delivery_Time', 'Automation']
             ].copy()
             
-            disp_am.columns = ['Pipeline / AM', 'Req', 'Livrées', 'Part Req (%)', 'Success Rate', 'WoW Req (%)', 'Tps Liv. (min)', 'Automation (%)']
+            disp_am.columns = ['Pipeline / AM', 'Req', 'Livrées', 'Part Req (%)', 'Success Rate', f'{label_evo} Req (%)', 'Tps Liv. (min)', 'Automation (%)']
             
             st.dataframe(
                 disp_am.style.format({
@@ -706,7 +725,7 @@ def popup_360(entity_type, entity_id, entity_name):
                     'Livrées': '{:,.0f}',
                     'Part Req (%)': '{:.1%}',
                     'Success Rate': '{:.1%}',
-                    'WoW Req (%)': '{:+.1%}',
+                    f'{label_evo} Req (%)': '{:+.1%}',
                     'Tps Liv. (min)': '{:.0f} min',
                     'Automation (%)': '{:.1%}'
                 }),
@@ -718,8 +737,7 @@ def popup_360(entity_type, entity_id, entity_name):
             
         st.markdown("---")
 
-    # --- TOPS & FLOPS DANS POPUP (ENREGISTREMENT DE L'HISTORIQUE AU CLIC) ---
-    if entity_type in ['Week', 'City', 'Area', 'Category']:
+    if entity_type in ['Week', 'Period', 'Month', 'City', 'Area', 'Category']:
         st.markdown(f"#### 📈 Tops & Flops ({entity_name}) - Volume de Commandes (🖱️ Cliquable)")
         resto_curr = compute_metrics(c_df, ['Restaurant ID', 'Restaurant Name'])
         resto_prev = compute_metrics(p_df, ['Restaurant ID', 'Restaurant Name'])
@@ -740,7 +758,6 @@ def popup_360(entity_type, entity_id, entity_name):
             )
             if is_new_selection(f"pop_top10_{note_id}", ev_t10.selection.rows):
                 r_idx = ev_t10.selection.rows[0]
-                # On mémorise l'entité actuelle dans l'historique avant d'ouvrir le restaurant
                 if "popup_history" not in st.session_state: st.session_state.popup_history = []
                 st.session_state.popup_history.append((entity_type, entity_id, entity_name))
                 st.session_state.from_popup_nav = True
@@ -764,7 +781,6 @@ def popup_360(entity_type, entity_id, entity_name):
             )
             if is_new_selection(f"pop_flop10_{note_id}", ev_f10.selection.rows):
                 r_idx = ev_f10.selection.rows[0]
-                # On mémorise l'entité actuelle dans l'historique avant d'ouvrir le restaurant
                 if "popup_history" not in st.session_state: st.session_state.popup_history = []
                 st.session_state.popup_history.append((entity_type, entity_id, entity_name))
                 st.session_state.from_popup_nav = True
@@ -774,7 +790,6 @@ def popup_360(entity_type, entity_id, entity_name):
                 st.session_state.popup_entity_name = flop10_pop.iloc[r_idx]['Restaurant Name']
                 st.rerun()
 
-    # --- GRAPHIQUE JOURNALIER ---
     if not c_df.empty:
         df_trend = c_df.groupby('order day').agg(Req=('order id','count'), Deliv=('status', lambda x: (x=='Delivered').sum())).reset_index()
         if not df_trend.empty:
@@ -782,7 +797,6 @@ def popup_360(entity_type, entity_id, entity_name):
     
     st.markdown("---")
     
-    # --- NOTES & TRANSFERTS ---
     col_act, col_trans = st.columns(2)
     with col_act:
         st.markdown(f"#### 📝 Ajouter une Note ({entity_name})")
@@ -802,7 +816,7 @@ def popup_360(entity_type, entity_id, entity_name):
                     jours = st.radio("Analyse post-action :", [7, 15, 30], format_func=lambda x: f"{x} Jours", horizontal=True, key=f"r_{idx_n}_{note_id}")
                     try:
                         d_note = pd.to_datetime(row['Date']).date()
-                        base_df = df_merged_full if entity_type == 'Week' else df_r
+                        base_df = df_merged_full if entity_type in ['Week', 'Period', 'Month'] else df_r
                         base_df['date_only'] = base_df['order day'].dt.date
                         avant = base_df[(base_df['date_only'] < d_note) & (base_df['date_only'] >= d_note - timedelta(days=jours))]
                         apres = base_df[(base_df['date_only'] >= d_note) & (base_df['date_only'] <= d_note + timedelta(days=jours))]
@@ -1024,7 +1038,7 @@ with tabs[1]:
             st.session_state.popup_entity_type = 'Restaurant'
             st.session_state.popup_entity_id = flop30.iloc[r_idx]['Restaurant ID']
             st.session_state.popup_entity_name = flop30.iloc[r_idx]['Restaurant Name']
-            
+
 # ----------------------------------------
 # ONGLET 3 : ANNULATIONS (RÉCIDIVISTES CLIQUABLES)
 # ----------------------------------------
