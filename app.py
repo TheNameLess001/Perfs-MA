@@ -168,6 +168,49 @@ def load_rst_list_master():
 
 df_rst_master = load_rst_list_master()
 
+# --- CHARGEMENT DE L'ANCIEN PÉRIMÈTRE (Old_Pipeline) ---
+@st.cache_data(ttl=600)
+def load_old_pipeline_master():
+    df_old = pd.DataFrame()
+    try:
+        sheet_old = gc.open("Old_Pipeline")
+        records = sheet_old.sheet1.get_all_records()
+        df_old = pd.DataFrame(records)
+    except Exception:
+        # Secours API Drive si c'est un CSV
+        try:
+            results = drive_service.files().list(
+                q="name = 'Old_Pipeline.csv' or name = 'Old_Pipeline' or name contains 'Old_Pipeline'",
+                fields="files(id, name, mimeType)"
+            ).execute()
+            files = results.get('files', [])
+            if files:
+                req = drive_service.files().get_media(fileId=files[0]['id'])
+                fh = io.BytesIO()
+                downloader = MediaIoBaseDownload(fh, req)
+                done = False
+                while not done: _, done = downloader.next_chunk()
+                fh.seek(0)
+                try:
+                    df_old = pd.read_csv(fh, sep=";", dtype=str)
+                    if df_old.shape[1] <= 1: fh.seek(0); df_old = pd.read_csv(fh, sep=",", dtype=str)
+                except Exception:
+                    fh.seek(0); df_old = pd.read_csv(fh, sep=",", dtype=str)
+        except Exception:
+            df_old = pd.DataFrame()
+
+    if not df_old.empty:
+        df_old.columns = [str(c).strip() for c in df_old.columns]
+        cols = df_old.columns.tolist()
+        if len(cols) >= 2:
+            # Colonne A = Restaurant ID, Colonne B = AM_Name_Old
+            df_old.rename(columns={cols[0]: 'Restaurant ID', cols[1]: 'AM_Name_Old'}, inplace=True)
+            df_old['Restaurant ID'] = clean_id_series(df_old['Restaurant ID'])
+            df_old['AM_Name_Old'] = df_old['AM_Name_Old'].astype(str).str.strip()
+    return df_old
+
+df_old_pipeline_master = load_old_pipeline_master()
+
 # --- FONCTION UNITAIRE DE TÉLÉCHARGEMENT ---
 def download_single_csv(file_info, add_source=True):
     try:
@@ -1214,7 +1257,7 @@ with tabs[8]:
             st.session_state.popup_entity_name = disp_cat.iloc[ev_cat.selection.rows[0]]['Food Category']
 
 # ----------------------------------------
-# ONGLET 10 : BONUS & PRIMES (RÉSERVÉ NAJWA / ADMIN - AVEC PRORATA ≥ 80% & SIMULATEUR Q2)
+# ONGLET 10 : BONUS & PRIMES (RÉSERVÉ NAJWA / ADMIN - AVEC SIMULATEUR OLD_PIPELINE)
 # ----------------------------------------
 with tabs[9]:
     st.markdown("#### 💰 Calculateur de Primes Trimestrielles (Quarter over Quarter)")
@@ -1344,33 +1387,56 @@ with tabs[9]:
         else:
             st.info("Aucune donnée disponible pour le calcul des primes.")
 
-        # --- 3. SIMULATEUR PROVISOIRE Q2 (ANCIENNE ORG : VILLE & EXCLUSIONS KAM) ---
+        # --- 3. SIMULATEUR PROVISOIRE Q2 (CONNECTÉ À OLD_PIPELINE) ---
         st.markdown("---")
-        st.markdown("#### 🛠️ Simulateur Provisoire Q2 (Ancienne Organisation : AM = Villes & Exclusions KAM)")
-        st.info("ℹ️ Ce simulateur permet d'évaluer la prime du 2ème trimestre (**Q2**) selon l'ancienne attribution par ville, en vous laissant exclure manuellement les grandes chaînes gérées par les KAM.")
+        st.markdown("#### 🛠️ Simulateur Provisoire Q2 (Ancien Périmètre : Google Sheet `Old_Pipeline`)")
+        
+        if 'df_old_pipeline_master' in globals() and not df_old_pipeline_master.empty:
+            st.success(f"✅ **Fichier `Old_Pipeline` connecté** — {len(df_old_pipeline_master):,} restaurants répertoriés dans l'ancienne organisation.")
+        else:
+            st.warning("⚠️ Fichier `Old_Pipeline` non accessible ou vide. Mode secours par ville activé.")
         
         col_sim_conf, col_sim_res = st.columns([1, 2])
         with col_sim_conf:
-            st.markdown("##### ⚙️ Configuration AM")
-            sim_am = st.selectbox("👤 Sélectionner l'AM :", ["Houda", "Chaima", "Najwa", "Imane", "Custom"], key="sim_q2_am")
+            st.markdown("##### ⚙️ Configuration AM (Q2)")
             
-            all_cities = sorted([str(c).strip() for c in df_merged_full['city'].dropna().unique() if str(c).strip() != 'nan'])
+            ams_dispos = ["Houda", "Chaima", "Najwa", "Imane", "Custom"]
+            if 'df_old_pipeline_master' in globals() and not df_old_pipeline_master.empty and 'AM_Name_Old' in df_old_pipeline_master.columns:
+                ams_from_sheet = sorted([str(a).strip() for a in df_old_pipeline_master['AM_Name_Old'].unique() if str(a).strip() not in ['nan', '', 'None']])
+                if ams_from_sheet:
+                    ams_dispos = ams_from_sheet + [a for a in ams_dispos if a not in ams_from_sheet]
             
-            # Presets de villes par défaut (entièrement modifiable dans le multiselect)
-            presets_am = {
-                "Houda": ["Casablanca", "Mohammedia"],
-                "Chaima": ["Rabat", "Salé", "Kenitra"],
-                "Najwa": ["Marrakech", "Agadir", "Tanger"],
-                "Imane": ["Fès", "Meknès", "Oujda"]
-            }
-            def_cities = [c for c in presets_am.get(sim_am, all_cities[:2]) if c in all_cities]
-            sim_cities = st.multiselect("🏙️ Villes assignées :", all_cities, default=def_cities if def_cities else all_cities, key="sim_q2_cities")
+            sim_am = st.selectbox("👤 Sélectionner l'AM :", ams_dispos, key="sim_q2_am")
             
-            # Détection automatique et sélection des grandes chaînes pour exclusion facile
-            restos_in_cities = sorted(df_merged_full[df_merged_full['city'].isin(sim_cities)]['Restaurant Name'].astype(str).unique()) if sim_cities else []
-            default_kam = [r for r in restos_in_cities if any(k in r.lower() for k in ['mcdo', 'kfc', 'burger king', 'pizza hut', 'domino', 'starbucks', 'carrefour', 'paul', 'baskin'])]
-            sim_excl_kam = st.multiselect("🏢 Chaînes / KAM à exclure :", restos_in_cities, default=default_kam, key="sim_q2_kam")
+            # RECHERCHE DIRECTE DES RESTAURANTS DE L'AM DANS OLD_PIPELINE
+            ids_old_am = []
+            if 'df_old_pipeline_master' in globals() and not df_old_pipeline_master.empty and 'AM_Name_Old' in df_old_pipeline_master.columns:
+                ids_old_am = df_old_pipeline_master[df_old_pipeline_master['AM_Name_Old'].astype(str).str.lower() == sim_am.lower()]['Restaurant ID'].unique().tolist()
             
+            if ids_old_am:
+                st.info(f"📌 **{len(ids_old_am)}** restaurants automatiquement attribués à **{sim_am}** via `Old_Pipeline`.")
+                restos_associes = df_merged_full[df_merged_full['Restaurant ID'].isin(ids_old_am)][['Restaurant ID', 'Restaurant Name']].drop_duplicates().sort_values('Restaurant Name')
+                list_noms = sorted(restos_associes['Restaurant Name'].astype(str).unique())
+                default_kam = [r for r in list_noms if any(k in r.lower() for k in ['mcdo', 'kfc', 'burger king', 'pizza hut', 'domino', 'starbucks', 'carrefour', 'paul', 'baskin'])]
+                sim_excl_kam = st.multiselect("🏢 Exclure des chaînes / KAM (optionnel) :", list_noms, default=default_kam, key="sim_q2_kam_old")
+                
+                df_prov = df_merged_full[
+                    (df_merged_full['Restaurant ID'].isin(ids_old_am)) & 
+                    (~df_merged_full['Restaurant Name'].astype(str).isin(sim_excl_kam))
+                ].copy()
+            else:
+                # Mode secours par villes si l'AM n'est pas trouvé dans Old_Pipeline
+                all_cities = sorted([str(c).strip() for c in df_merged_full['city'].dropna().unique() if str(c).strip() != 'nan'])
+                presets_am = {"Houda": ["Casablanca", "Mohammedia"], "Chaima": ["Rabat", "Salé", "Kenitra"], "Najwa": ["Marrakech", "Agadir", "Tanger"], "Imane": ["Fès", "Meknès", "Oujda"]}
+                def_cities = [c for c in presets_am.get(sim_am, all_cities[:2]) if c in all_cities]
+                sim_cities = st.multiselect("🏙️ Villes assignées (secours) :", all_cities, default=def_cities if def_cities else all_cities, key="sim_q2_cities")
+                
+                restos_in_cities = sorted(df_merged_full[df_merged_full['city'].isin(sim_cities)]['Restaurant Name'].astype(str).unique()) if sim_cities else []
+                default_kam = [r for r in restos_in_cities if any(k in r.lower() for k in ['mcdo', 'kfc', 'burger king', 'pizza hut', 'domino', 'starbucks', 'carrefour', 'paul', 'baskin'])]
+                sim_excl_kam = st.multiselect("🏢 Chaînes / KAM à exclure :", restos_in_cities, default=default_kam, key="sim_q2_kam_old_fb")
+                
+                df_prov = df_merged_full[(df_merged_full['city'].isin(sim_cities)) & (~df_merged_full['Restaurant Name'].astype(str).isin(sim_excl_kam))].copy()
+
             all_quarters = sorted((df_merged_full['order day'].dt.year.astype(str) + "-Q" + df_merged_full['order day'].dt.quarter.astype(str)).unique(), reverse=True)
             def_q2 = next((q for q in all_quarters if "Q2" in q), all_quarters[0] if all_quarters else "2026-Q2")
             sim_target_q = st.selectbox("🎯 Trimestre cible :", all_quarters, index=all_quarters.index(def_q2) if def_q2 in all_quarters else 0, key="sim_q2_target")
@@ -1378,15 +1444,10 @@ with tabs[9]:
         with col_sim_res:
             st.markdown(f"##### 📊 Résultats Simulés pour **{sim_am}** ({sim_target_q})")
             
-            if not sim_cities:
-                st.warning("⚠️ Veuillez sélectionner au moins une ville pour lancer la simulation.")
+            if df_prov.empty:
+                st.warning("⚠️ Aucune donnée trouvée pour cet AM dans `Old_Pipeline`. Vérifiez que l'AM existe bien dans la colonne B.")
             else:
-                df_prov = df_merged_full[
-                    (df_merged_full['city'].isin(sim_cities)) & 
-                    (~df_merged_full['Restaurant Name'].astype(str).isin(sim_excl_kam))
-                ].copy()
                 df_prov['Quarter'] = df_prov['order day'].dt.year.astype(str) + "-Q" + df_prov['order day'].dt.quarter.astype(str)
-                
                 q_prov = compute_metrics(df_prov, ['Quarter']).sort_values('Quarter', ascending=True)
                 
                 if not q_prov.empty:
@@ -1423,7 +1484,6 @@ with tabs[9]:
                     else:
                         st.info(f"Le trimestre {sim_target_q} n'a pas encore de données dans cette configuration.")
                         
-                    # Tableau récapitulatif
                     disp_sim = q_prov.sort_values('Quarter', ascending=False).copy()
                     disp_sim['Croissance GMV'] = disp_sim.apply(lambda r: f"{r['Growth GMV']:+.1%} (Att: {r['Att GMV']:.0%} ➡️ {r['Prime GMV (DH)']:,.0f} DH)", axis=1)
                     disp_sim['Annulations Resto'] = disp_sim.apply(lambda r: f"{r['Taux Cancel']:.1%} (Att: {r['Att Cancel']:.0%} ➡️ {r['Prime Cancel (DH)']:,.0f} DH)", axis=1)
@@ -1439,8 +1499,7 @@ with tabs[9]:
                         use_container_width=True
                     )
                 else:
-                    st.info("Aucune commande trouvée pour ces villes après exclusion des KAM.")
-
+                    st.info("Aucune commande trouvée pour ce périmètre.")
 
 # ==========================================
 # GESTION SÉCURISÉE DU POPUP (FIN DU FICHIER)
