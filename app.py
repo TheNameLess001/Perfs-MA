@@ -105,7 +105,7 @@ if not fichiers_disponibles and not master_file_info:
     st.warning("⚠️ Aucun fichier trouvé sur Drive.")
     st.stop()
 
-#==========================================
+# ==========================================
 # 3. MOTEUR DE FUSION TOTALE DES FICHIERS & REFERENTIEL
 # ==========================================
 
@@ -380,8 +380,71 @@ def generate_food_segments_export(_df_orders, _df_rst):
     return res[cols_order]
 
 df_export_master = generate_food_segments_export(df_merged_full, df_rst_master)
+
 # ==========================================
-# 4. MOTEUR DE CALCULS & PROTECTION ZERO (CORRIGÉ & ROBUSTE)
+# BANDEAU DE CONTRÔLE SUPÉRIEUR (TOP BAR)
+# ==========================================
+st.markdown("---")
+col_time_mode, col_time_sel, col_am_sel, col_stats = st.columns([1.5, 2, 1.5, 2])
+
+with col_time_mode:
+    mode_temporel = st.radio("⏳ Vue Temporelle :", ["📊 Par Semaine", "🗓️ Par Mois"], horizontal=True, key="top_time_mode")
+
+with col_time_sel:
+    if mode_temporel == "📊 Par Semaine":
+        periodes_dispos = sorted([str(w) for w in df_merged_full['Week'].dropna().unique() if pd.notnull(w) and str(w).strip() not in ['nan', '', 'None', '<NA>']], reverse=True)
+        label_select = "📅 Semaine principale"
+        col_temps = 'Week'
+        label_evo_global = "WoW"
+    else:
+        periodes_dispos = sorted([str(m) for m in df_merged_full['Month'].dropna().unique() if pd.notnull(m) and str(m).strip() not in ['nan', '', 'None', '<NA>']], reverse=True)
+        label_select = "🗓️ Mois principal"
+        col_temps = 'Month'
+        label_evo_global = "MoM"
+        
+    periode_selectionnee = st.selectbox(label_select, periodes_dispos, key="top_time_select")
+    try: 
+        periode_precedente = periodes_dispos[periodes_dispos.index(periode_selectionnee) + 1]
+    except: 
+        periode_precedente = None
+        
+    semaine_selectionnee = periode_selectionnee
+    semaine_precedente = periode_precedente
+
+with col_am_sel:
+    am_choisi = st.selectbox("🎯 Pipeline / AM :", ["Global", "Houda", "Chaima", "Najwa", "Imane"], key="top_am_select")
+
+if am_choisi != "Global":
+    df_pipe_am = df_pipeline_master[df_pipeline_master['AM_Name'].astype(str).str.lower() == am_choisi.lower()]
+    am_ids = df_pipe_am['Restaurant ID'].unique()
+    liste_attendue = master_restos[master_restos['Restaurant ID'].isin(am_ids)].copy()
+    df_merged = df_merged_full[df_merged_full['Restaurant ID'].isin(am_ids)].copy()
+else:
+    liste_attendue = master_restos.copy()
+    df_merged = df_merged_full.copy()
+
+pattern_exclus = '|'.join(['test', 'restau fixe', 'restau avance'])
+df_merged = df_merged[~df_merged['Restaurant Name'].astype(str).str.contains(pattern_exclus, case=False, na=False)]
+liste_attendue = liste_attendue[~liste_attendue['Restaurant Name'].astype(str).str.contains(pattern_exclus, case=False, na=False)]
+
+try: 
+    df_caisse = pd.read_csv("CaisseMA.csv", sep=None, engine='python')
+    if 'Restaurant ID' in df_caisse.columns: df_caisse['Restaurant ID'] = clean_id_series(df_caisse['Restaurant ID'])
+except: df_caisse = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name'])
+    
+try: 
+    df_new = pd.read_csv("NewRestaurants.csv", sep=None, engine='python')
+    if 'Restaurant ID' in df_new.columns: df_new['Restaurant ID'] = clean_id_series(df_new['Restaurant ID'])
+except: df_new = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name'])
+
+with col_stats:
+    msg_mode = f"⚡ Master Drive ({len(fichiers_disponibles)} fichiers)" if 'master_file_info' in globals() and master_file_info else "🔄 Consolidation active"
+    st.info(f"**Périmètre :** {am_choisi} | **Total Cmds :** {len(df_merged):,}\n{msg_mode}")
+
+st.markdown("---")
+
+# ==========================================
+# 4. MOTEUR DE CALCULS & PROTECTION ZERO
 # ==========================================
 def compute_metrics(df_subset, group_cols):
     if df_subset.empty:
@@ -464,7 +527,6 @@ def compare_wow(df_curr, df_prev, merge_on):
         df_comp['Tier'] = "N/A"
     return df_comp
 
-# MOTEUR TEMPOREL DYNAMIQUE (ADAPTÉ AU CHOIX SEMAINE OU MOIS)
 df_current = df_merged[df_merged[col_temps] == periode_selectionnee].copy()
 df_prev = df_merged[df_merged[col_temps] == periode_precedente] if periode_precedente else pd.DataFrame(columns=df_merged.columns)
 
@@ -473,7 +535,6 @@ def get_metrics_with_zeroes(df_subset, expected_base):
     res = pd.merge(expected_base, metrics, on='Restaurant ID', how='left').fillna(0)
     return res
 
-# --- MAPPING VILLE / ZONE ROBUSTE (CSV + FALLBACK RST_list POUR LES RESTOS A 0 COMMANDE) ---
 mapping_csv = df_merged_full[['Restaurant ID', 'Area', 'city']].dropna(subset=['Restaurant ID']).drop_duplicates('Restaurant ID')
 
 if 'df_rst_master' in globals() and not df_rst_master.empty and 'Main City' in df_rst_master.columns and 'Sub City' in df_rst_master.columns:
@@ -489,7 +550,6 @@ liste_base_overview['city'] = liste_base_overview['city'].fillna('Inconnu')
 df_current_full = get_metrics_with_zeroes(df_current, liste_base_overview)
 df_prev_full = get_metrics_with_zeroes(df_prev, liste_base_overview)
 
-# --- DÉTECTEUR DE CLIC UNIVERSEL ---
 def is_new_selection(key, selection_rows):
     prev_key = f"prev_sel_{key}"
     prev = st.session_state.get(prev_key, [])
@@ -498,7 +558,7 @@ def is_new_selection(key, selection_rows):
     return curr != prev and len(curr) > 0
     
 # ==========================================
-# 5. POPUP 360° UNIVERSEL (COMPATIBLE SEMAINE & MOIS + NAVIGATION RETOUR)
+# 5. POPUP 360° UNIVERSEL
 # ==========================================
 @st.dialog("🔍 Vue 360° Détaillée", width="large")
 def popup_360(entity_type, entity_id, entity_name):
@@ -863,7 +923,7 @@ def popup_360(entity_type, entity_id, entity_name):
                 st.success(f"Transféré à {nouveau_am} !")
                 
 # ==========================================
-# 6. ONGLETS ET AFFICHAGES VISUELS (100% CLIQUABLES + BONUS PRORATA)
+# 6. ONGLETS ET AFFICHAGES VISUELS
 # ==========================================
 tabs = st.tabs(["🌍 1. Macro", "📈 2. Overview", "❌ 3. Annulations", "🤖 4. Auto", "💻 5. Caisse.ma", "✨ 6. New", "👻 7. Inactifs", "🏆 8. Héros", "🍕 9. Catégories", "💰 10. Bonus", "📤 11. Export Segments"])
 
@@ -966,7 +1026,7 @@ with tabs[0]:
             st.session_state.popup_entity_name = f"Zone : {val_area}"
 
 # ----------------------------------------
-# ONGLET 2 : OVERVIEW PIPELINE (TOUS TABLEAUX CLIQUABLES)
+# ONGLET 2 : OVERVIEW PIPELINE
 # ----------------------------------------
 with tabs[1]:
     st.markdown("#### 📋 Base Détaillée (🖱️ Cliquez sur une ligne)")
@@ -1057,7 +1117,7 @@ with tabs[1]:
             st.session_state.popup_entity_name = flop30.iloc[r_idx]['Restaurant Name']
 
 # ----------------------------------------
-# ONGLET 3 : ANNULATIONS (RÉCIDIVISTES CLIQUABLES)
+# ONGLET 3 : ANNULATIONS
 # ----------------------------------------
 with tabs[2]:
     st.markdown("#### ❌ Surveillance des Annulations")
@@ -1102,7 +1162,7 @@ with tabs[2]:
         st.session_state.popup_entity_name = pires.iloc[r_idx]['Restaurant Name']
 
 # ----------------------------------------
-# ONGLET 4 : AUTOMATION (CLIQUABLE)
+# ONGLET 4 : AUTOMATION
 # ----------------------------------------
 with tabs[3]:
     st.markdown("#### 🤖 Automatisation")
@@ -1169,7 +1229,7 @@ def merge_ext(df_ext, comp):
     return res
 
 # ----------------------------------------
-# ONGLETS 5, 6, 7 : Caisse, New, Inactifs (TOUS CLIQUABLES)
+# ONGLETS 5, 6, 7 : Caisse, New, Inactifs
 # ----------------------------------------
 with tabs[4]:
     st.markdown("#### 💻 Caisse.ma (🖱️ Cliquable)")
@@ -1219,7 +1279,7 @@ with tabs[6]:
         st.session_state.popup_entity_name = restos_inactifs.iloc[r_idx]['Restaurant Name']
 
 # ----------------------------------------
-# ONGLETS 8 & 9 : Héros & Catégories (CLIQUABLES)
+# ONGLETS 8 & 9 : Héros & Catégories
 # ----------------------------------------
 with tabs[7]:
     st.markdown("#### 🏆 Produits Héros (🖱️ Cliquable)")
@@ -1294,7 +1354,7 @@ with tabs[8]:
             st.session_state.popup_entity_name = disp_cat.iloc[ev_cat.selection.rows[0]]['Food Category']
 
 # ----------------------------------------
-# ONGLET 10 : BONUS & PRIMES (RÉSERVÉ NAJWA / ADMIN - AVEC SIMULATEUR OLD_PIPELINE SÉCURISÉ)
+# ONGLET 10 : BONUS & PRIMES
 # ----------------------------------------
 with tabs[9]:
     st.markdown("#### 💰 Calculateur de Primes Trimestrielles (Quarter over Quarter)")
@@ -1317,13 +1377,11 @@ with tabs[9]:
             q_metrics['Taux Cancel'] = (q_metrics['CancelledByRestaurant'] / q_metrics['Requested'].replace(0, np.nan)).fillna(0)
             q_metrics['Taux Auto'] = (q_metrics['Auto_Accepted'] / q_metrics['Requested'].replace(0, np.nan)).fillna(0)
             
-            # 1. CALCUL DU TAUX D'ATTEINTE (PLAFONNÉ À 100% / 1.0 MAX)
             q_metrics['Atteinte GMV'] = np.where(q_metrics['GMV_prev'] > 0, np.clip(q_metrics['Growth GMV'] / 0.30, 0, 1.0), 0)
             q_metrics['Atteinte Cancel'] = np.where(q_metrics['Taux Cancel'] > 0, np.clip(0.03 / q_metrics['Taux Cancel'], 0, 1.0), 1.0)
             q_metrics['Atteinte Cancel'] = np.where(q_metrics['Requested'] > 0, q_metrics['Atteinte Cancel'], 0)
             q_metrics['Atteinte Auto'] = np.where(q_metrics['Requested'] > 0, np.clip(q_metrics['Taux Auto'] / 0.50, 0, 1.0), 0)
             
-            # 2. CALCUL DES PRIMES : SI ATTEINTE >= 80% -> ATTEINTE * 2000 DH, SINON 0 DH
             q_metrics['Prime GMV (DH)'] = np.where(q_metrics['Atteinte GMV'] >= 0.80, q_metrics['Atteinte GMV'] * 2000, 0)
             q_metrics['Prime Cancel (DH)'] = np.where(q_metrics['Atteinte Cancel'] >= 0.80, q_metrics['Atteinte Cancel'] * 2000, 0)
             q_metrics['Prime Auto (DH)'] = np.where(q_metrics['Atteinte Auto'] >= 0.80, q_metrics['Atteinte Auto'] * 2000, 0)
@@ -1424,7 +1482,7 @@ with tabs[9]:
         else:
             st.info("Aucune donnée disponible pour le calcul des primes.")
 
-        # --- 3. SIMULATEUR PROVISOIRE Q2 (CONNECTÉ À OLD_PIPELINE & 100% SÉCURISÉ CONTRE LES VALEURS NULLES) ---
+        # --- 3. SIMULATEUR PROVISOIRE Q2 ---
         st.markdown("---")
         st.markdown("#### 🛠️ Simulateur Provisoire Q2 (Ancien Périmètre : Google Sheet `Old_Pipeline`)")
         
@@ -1445,7 +1503,6 @@ with tabs[9]:
             
             sim_am = st.selectbox("👤 Sélectionner l'AM :", ams_dispos, key="sim_q2_am")
             
-            # RECHERCHE DIRECTE DES RESTAURANTS DE L'AM DANS OLD_PIPELINE
             ids_old_am = []
             if 'df_old_pipeline_master' in globals() and not df_old_pipeline_master.empty and 'AM_Name_Old' in df_old_pipeline_master.columns:
                 ids_old_am = df_old_pipeline_master[df_old_pipeline_master['AM_Name_Old'].astype(str).str.lower() == sim_am.lower()]['Restaurant ID'].unique().tolist()
@@ -1454,7 +1511,6 @@ with tabs[9]:
                 st.info(f"📌 **{len(ids_old_am)}** restaurants automatiquement attribués à **{sim_am}** via `Old_Pipeline`.")
                 restos_associes = df_merged_full[df_merged_full['Restaurant ID'].isin(ids_old_am)]
                 
-                # --- SÉCURISATION BLINDÉE CONTRE LES NOMS VIDES ---
                 list_noms = sorted([str(r).strip() for r in restos_associes['Restaurant Name'].dropna().unique() if pd.notnull(r) and str(r).strip() not in ['nan', '', 'None', '<NA>']])
                 default_kam = [r for r in list_noms if any(k in r.lower() for k in ['mcdo', 'kfc', 'burger king', 'pizza hut', 'domino', 'starbucks', 'carrefour', 'paul', 'baskin'])]
                 sim_excl_kam = st.multiselect("🏢 Exclure des chaînes / KAM (optionnel) :", list_noms, default=default_kam, key="sim_q2_kam_old")
@@ -1464,13 +1520,11 @@ with tabs[9]:
                     (~df_merged_full['Restaurant Name'].astype(str).isin(sim_excl_kam))
                 ].copy()
             else:
-                # Mode secours par villes si l'AM n'est pas trouvé dans Old_Pipeline
                 all_cities = sorted([str(c).strip() for c in df_merged_full['city'].dropna().unique() if pd.notnull(c) and str(c).strip() not in ['nan', '', 'None', '<NA>']])
                 presets_am = {"Houda": ["Casablanca", "Mohammedia"], "Chaima": ["Rabat", "Salé", "Kenitra"], "Najwa": ["Marrakech", "Agadir", "Tanger"], "Imane": ["Fès", "Meknès", "Oujda"]}
                 def_cities = [c for c in presets_am.get(sim_am, all_cities[:2]) if c in all_cities]
                 sim_cities = st.multiselect("🏙️ Villes assignées (secours) :", all_cities, default=def_cities if def_cities else all_cities, key="sim_q2_cities")
                 
-                # --- SÉCURISATION BLINDÉE DU TRI DES RESTAURANTS PAR VILLE ---
                 restos_in_cities = sorted([str(r).strip() for r in df_merged_full[df_merged_full['city'].isin(sim_cities)]['Restaurant Name'].dropna().unique() if pd.notnull(r) and str(r).strip() not in ['nan', '', 'None', '<NA>']])
                 default_kam = [r for r in restos_in_cities if any(k in r.lower() for k in ['mcdo', 'kfc', 'burger king', 'pizza hut', 'domino', 'starbucks', 'carrefour', 'paul', 'baskin'])]
                 sim_excl_kam = st.multiselect("🏢 Chaînes / KAM à exclure :", restos_in_cities, default=default_kam, key="sim_q2_kam_old_fb")
@@ -1542,7 +1596,7 @@ with tabs[9]:
                     st.info("Aucune commande trouvée pour ce périmètre.")
 
 # ----------------------------------------
-# ONGLET 11 : EXPORT SEGMENTS FOOD & TAGS (100% CLIQUABLE)
+# ONGLET 11 : EXPORT SEGMENTS FOOD & TAGS
 # ----------------------------------------
 with tabs[10]:
     st.markdown("#### 📤 Export & Classification des Restaurants par Segment Food et Spécialités")
@@ -1567,13 +1621,11 @@ with tabs[10]:
         
     st.markdown(f"##### 📋 Liste des Restaurants classés (**{len(df_exp_disp):,}** résultats)")
     
-    # Boutons d'export direct en CSV
     col_d1, col_d2 = st.columns([1, 4])
     with col_d1:
         csv_data = df_exp_disp.to_csv(index=False, sep=";", encoding='utf-8-sig')
         st.download_button("📥 Télécharger (CSV Excel)", data=csv_data, file_name=f"Yassir_Export_Segments_Tags_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv", use_container_width=True)
         
-    # Tableau 100% Cliquable vers la vue 360°
     ev_export = st.dataframe(
         df_exp_disp,
         column_config={"Restaurant ID": None},
