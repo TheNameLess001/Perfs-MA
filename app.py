@@ -300,6 +300,114 @@ except Exception as e:
     st.error(f"❌ Erreur critique lors de la fusion : {e}")
     st.stop()
 
+# --- FIN DU BLOC TRY DE LA SECTION 3 ---
+        df_merged['order day'] = pd.to_datetime(df_merged['order day'])
+        df_merged['Week'] = "Week " + df_merged['order day'].dt.isocalendar().week.astype(str).str.zfill(2)
+        df_merged['Month'] = df_merged['order day'].dt.strftime('%Y-%m')
+        semaines_dispos = sorted(df_merged_full['Week'].unique(), reverse=True)
+
+except Exception as e:
+    st.error(f"❌ Erreur critique lors de la fusion : {e}")
+    st.stop()
+
+
+# ⬇️ ⬇️ ⬇️ COLLER EXACTEMENT ICI (ENTRE LE EXCEPT ET LE BANDEAU SUPÉRIEUR) ⬇️ ⬇️ ⬇️
+
+# --- MOTEUR DE CATÉGORISATION & EXPORT SEGMENTS FOOD ---
+@st.cache_data(show_spinner=False)
+def generate_food_segments_export(_df_orders, _df_rst):
+    # 1. Base restaurants depuis RST_list et Orders
+    cols_id_name = ['Restaurant ID', 'Restaurant Name']
+    l_rst = _df_rst[cols_id_name].dropna(subset=['Restaurant ID']) if (not _df_rst.empty and all(c in _df_rst.columns for c in cols_id_name)) else pd.DataFrame(columns=cols_id_name)
+    l_ord = _df_orders[cols_id_name].dropna(subset=['Restaurant ID']) if (not _df_orders.empty and all(c in _df_orders.columns for c in cols_id_name)) else pd.DataFrame(columns=cols_id_name)
+    
+    df_base = pd.concat([l_rst, l_ord], ignore_index=True).drop_duplicates(subset=['Restaurant ID'], keep='first').copy()
+    df_base['Restaurant ID'] = clean_id_series(df_base['Restaurant ID'])
+    
+    # 2. Calcul du Best Seller All Time Category depuis les ventes réelles
+    best_cat_df = pd.DataFrame(columns=['Restaurant ID', 'best seller all time category'])
+    if not _df_orders.empty and 'Food Category' in _df_orders.columns:
+        df_val = _df_orders.dropna(subset=['Restaurant ID', 'Food Category']).copy()
+        df_val['Restaurant ID'] = clean_id_series(df_val['Restaurant ID'])
+        df_val['Food Category'] = df_val['Food Category'].astype(str).str.replace(r'\[|\]|/', '', regex=True).str.strip()
+        df_val = df_val[df_val['Food Category'].str.lower() != 'nan']
+        
+        if not df_val.empty:
+            cat_counts = df_val.groupby(['Restaurant ID', 'Food Category']).size().reset_index(name='cnt')
+            best_cat_df = cat_counts.sort_values(['Restaurant ID', 'cnt'], ascending=[True, False]).drop_duplicates('Restaurant ID', keep='first')
+            best_cat_df.rename(columns={'Food Category': 'best seller all time category'}, inplace=True)
+            
+    # 3. Agrégation des textes de ventes par restaurant
+    sales_agg = pd.DataFrame(columns=['Restaurant ID', 'sales_text'])
+    if not _df_orders.empty:
+        df_txt = _df_orders.dropna(subset=['Restaurant ID']).copy()
+        df_txt['Restaurant ID'] = clean_id_series(df_txt['Restaurant ID'])
+        for c in ['Food Item', 'Food Category', 'services']:
+            if c not in df_txt.columns: df_txt[c] = ''
+        sales_agg = df_txt.groupby('Restaurant ID').apply(
+            lambda g: ' '.join(g['Food Item'].dropna().astype(str).tolist() + g['Food Category'].dropna().astype(str).tolist() + g['services'].dropna().astype(str).tolist())
+        ).reset_index(name='sales_text')
+
+    # 4. Fusion Master
+    res = pd.merge(df_base, best_cat_df[['Restaurant ID', 'best seller all time category']], on='Restaurant ID', how='left')
+    res = pd.merge(res, sales_agg, on='Restaurant ID', how='left')
+    
+    if not _df_rst.empty and 'Cuisine Type' in _df_rst.columns:
+        res = pd.merge(res, _df_rst[['Restaurant ID', 'Cuisine Type', 'Services', 'Sections']].drop_duplicates('Restaurant ID'), on='Restaurant ID', how='left')
+    else:
+        for c in ['Cuisine Type', 'Services', 'Sections']: res[c] = ''
+        
+    res['best seller all time category'] = res['best seller all time category'].fillna('N/A / Général')
+    res['Type cuisine'] = res['Cuisine Type'].fillna('Général').astype(str).str.strip()
+    res['sales_text'] = res['sales_text'].fillna('')
+
+    # 5. Moteur d'affectation Segment Food (5 Catégories)
+    def get_segment(row):
+        txt = ' '.join([str(row['Type cuisine']), str(row['Services']), str(row['best seller all time category']), str(row['Restaurant Name']), str(row['sales_text'])]).lower()
+        if any(k in txt for k in ['brunch', 'petit déj', 'petit dej', 'breakfast', 'coffee', 'café', 'cafe', 'douceur', 'sweet', 'dessert', 'glace', 'ice cream', 'gaufre', 'crêpe', 'crepe', 'pâtiss', 'patiss', 'boulang', 'bakery', 'jus', 'juice', 'smoothie', 'donut', 'churros']):
+            return '🍩 Brunch & Sweet'
+        if any(k in txt for k in ['pizza', 'calzone', 'pâte', 'pates', 'pasta', 'spaghet', 'penne', 'tagliatell', 'lasagn', 'macaroni', 'trattoria', 'pizzeria']):
+            return '🍕 Pizza & Pasta'
+        if any(k in txt for k in ['healthy', 'salad', 'salade', 'bowl', 'poke', 'diet', 'bio', 'fruit', 'légume', 'legume', 'soupe', 'soup', 'végan', 'vegan', 'fit', 'fresh', 'detox']):
+            return '🥑 Fresh & Healthy'
+        if any(k in txt for k in ['asiatique', 'sushi', 'wok', 'japon', 'chin', 'thai', 'ramen', 'noodle', 'nem', 'maki', 'indien', 'indian', 'liban', 'leban', 'syri', 'mexic', 'marocain', 'moroccan', 'traditionnel', 'oriental', 'turc', 'couscous', 'tajine']):
+            return '🌍 World of Tastes'
+        return '🍔 Street Food'
+
+    res['Segment Food'] = res.apply(get_segment, axis=1)
+
+    # 6. Détection des 9 Tags / Indicateurs de spécialités
+    tag_kw = {
+        'Tacos🌮': ['taco'], 'Burger🍔': ['burger', 'whopper', 'big mac', 'mcdo'], 'Panini 🌭': ['panini'],
+        'Sandwich 🌭': ['sandwich', 'sandw', 'club', 'bocadillo', 'subway', 'baguette'], 'Pizza🍕': ['pizza', 'calzone', 'domino', 'pizz'],
+        'Asiatique🍣': ['asiatique', 'sushi', 'wok', 'japon', 'chin', 'thai', 'noodle', 'ramen', 'nem', 'maki', 'roll', 'asia', 'sashimi'],
+        'Shawarma🥙': ['shawarma', 'chawarma', 'chawerma', 'kebab', 'gyros', 'doner', 'syri'],
+        'Poulet🍗': ['poulet', 'chicken', 'kfc', 'wings', 'nugget', 'tender', 'crispy', 'chick', 'rotiss', 'coquelet'],
+        'Pâtes🍝': ['pâte', 'pates', 'pasta', 'spaghet', 'penne', 'tagliatell', 'lasagn', 'macaroni', 'bolognaise', 'carbonara']
+    }
+    
+    for tag, kws in tag_kw.items():
+        def check_tag(row, keywords=kws):
+            stxt = ' '.join([str(row['sales_text']), str(row['best seller all time category'])]).lower()
+            if any(k in stxt for k in keywords): return "✅ Oui"
+            rtxt = ' '.join([str(row['Restaurant Name']), str(row['Type cuisine']), str(row['Services']), str(row['Sections'])]).lower()
+            if any(k in rtxt for k in keywords): return "✅ Oui"
+            return "❌ Non"
+        res[tag] = res.apply(check_tag, axis=1)
+
+    cols_order = ['Restaurant ID', 'Restaurant Name', 'Type cuisine', 'Segment Food', 'best seller all time category', 'Tacos🌮', 'Burger🍔', 'Panini 🌭', 'Sandwich 🌭', 'Pizza🍕', 'Asiatique🍣', 'Shawarma🥙', 'Poulet🍗', 'Pâtes🍝']
+    return res[cols_order]
+
+df_export_master = generate_food_segments_export(df_merged_full, df_rst_master)
+
+# ⬆️ ⬆️ ⬆️ FIN DU BLOC À COLLER ⬆️ ⬆️ ⬆️
+
+# ==========================================
+# BANDEAU DE CONTRÔLE SUPÉRIEUR (TOP BAR)
+# ==========================================
+st.markdown("---")
+col_time_mode, col_time_sel, col_am_sel, col_stats = st.columns([1.5, 2, 1.5, 2])
+
 # ==========================================
 # BANDEAU DE CONTRÔLE SUPÉRIEUR (TOP BAR)
 # ==========================================
@@ -848,7 +956,7 @@ def popup_360(entity_type, entity_id, entity_name):
 # ==========================================
 # 6. ONGLETS ET AFFICHAGES VISUELS (100% CLIQUABLES + BONUS PRORATA)
 # ==========================================
-tabs = st.tabs(["🌍 1. Macro", "📈 2. Overview", "❌ 3. Annulations", "🤖 4. Auto", "💻 5. Caisse.ma", "✨ 6. New", "👻 7. Inactifs", "🏆 8. Héros", "🍕 9. Catégories", "💰 10. Bonus"])
+tabs = st.tabs(["🌍 1. Macro", "📈 2. Overview", "❌ 3. Annulations", "🤖 4. Auto", "💻 5. Caisse.ma", "✨ 6. New", "👻 7. Inactifs", "🏆 8. Héros", "🍕 9. Catégories", "💰 10. Bonus", "📤 11. Export Segments"])
 
 # ----------------------------------------
 # ONGLET 1 : ANALYSE GLOBAL (MACRO)
@@ -1523,6 +1631,54 @@ with tabs[9]:
                     )
                 else:
                     st.info("Aucune commande trouvée pour ce périmètre.")
+
+# ----------------------------------------
+# ONGLET 11 : EXPORT SEGMENTS FOOD & TAGS (100% CLIQUABLE)
+# ----------------------------------------
+with tabs[10]:
+    st.markdown("#### 📤 Export & Classification des Restaurants par Segment Food et Spécialités")
+    st.info("ℹ️ **Méthodologie :** La classification détecte en priorité les spécialités vendues dans l'historique (`Food Item` & `Food Category`). Si le produit n'apparaît pas dans les transactions récentes, le moteur se base sur le `Restaurant Name` et le référentiel `RST_list`.")
+    
+    col_f1, col_f2, col_f3 = st.columns([2, 2, 2])
+    with col_f1:
+        seg_filter = st.multiselect("🏷️ Filtrer par Segment Food :", ["🌍 World of Tastes", "🍔 Street Food", "🍩 Brunch & Sweet", "🍕 Pizza & Pasta", "🥑 Fresh & Healthy"], default=[], key="exp_seg_sel")
+    with col_f2:
+        tag_filter = st.selectbox("🌮 Filtrer par Spécialité / Tag :", ["Tous les restaurants", "Tacos🌮", "Burger🍔", "Panini 🌭", "Sandwich 🌭", "Pizza🍕", "Asiatique🍣", "Shawarma🥙", "Poulet🍗", "Pâtes🍝"], key="exp_tag_sel")
+    with col_f3:
+        search_name = st.text_input("🔍 Rechercher par Nom de Restaurant :", "", key="exp_name_srch")
+        
+    df_exp_disp = df_export_master.copy()
+    
+    if seg_filter:
+        df_exp_disp = df_exp_disp[df_exp_disp['Segment Food'].isin(seg_filter)]
+    if tag_filter != "Tous les restaurants":
+        df_exp_disp = df_exp_disp[df_exp_disp[tag_filter] == "✅ Oui"]
+    if search_name.strip():
+        df_exp_disp = df_exp_disp[df_exp_disp['Restaurant Name'].astype(str).str.contains(search_name.strip(), case=False, na=False)]
+        
+    st.markdown(f"##### 📋 Liste des Restaurants classés (**{len(df_exp_disp):,}** résultats)")
+    
+    # Boutons d'export direct en CSV
+    col_d1, col_d2 = st.columns([1, 4])
+    with col_d1:
+        csv_data = df_exp_disp.to_csv(index=False, sep=";", encoding='utf-8-sig')
+        st.download_button("📥 Télécharger (CSV Excel)", data=csv_data, file_name=f"Yassir_Export_Segments_Tags_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv", use_container_width=True)
+        
+    # Tableau 100% Cliquable vers la vue 360°
+    ev_export = st.dataframe(
+        df_exp_disp,
+        column_config={"Restaurant ID": None},
+        hide_index=True,
+        use_container_width=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        key="export_table_select"
+    )
+    if is_new_selection("export_table_select", ev_export.selection.rows):
+        r_idx = ev_export.selection.rows[0]
+        st.session_state.popup_entity_type = 'Restaurant'
+        st.session_state.popup_entity_id = df_exp_disp.iloc[r_idx]['Restaurant ID']
+        st.session_state.popup_entity_name = df_exp_disp.iloc[r_idx]['Restaurant Name']
 
 # ==========================================
 # GESTION SÉCURISÉE DU POPUP (FIN DU FICHIER)
