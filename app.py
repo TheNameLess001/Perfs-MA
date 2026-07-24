@@ -105,7 +105,7 @@ if not fichiers_disponibles and not master_file_info:
     st.warning("⚠️ Aucun fichier trouvé sur Drive.")
     st.stop()
 
-# ==========================================
+#==========================================
 # 3. MOTEUR DE FUSION TOTALE DES FICHIERS & REFERENTIEL
 # ==========================================
 
@@ -300,23 +300,9 @@ except Exception as e:
     st.error(f"❌ Erreur critique lors de la fusion : {e}")
     st.stop()
 
-# --- FIN DU BLOC TRY DE LA SECTION 3 ---
-        df_merged['order day'] = pd.to_datetime(df_merged['order day'])
-        df_merged['Week'] = "Week " + df_merged['order day'].dt.isocalendar().week.astype(str).str.zfill(2)
-        df_merged['Month'] = df_merged['order day'].dt.strftime('%Y-%m')
-        semaines_dispos = sorted(df_merged_full['Week'].unique(), reverse=True)
-
-except Exception as e:
-    st.error(f"❌ Erreur critique lors de la fusion : {e}")
-    st.stop()
-
-
-# ⬇️ ⬇️ ⬇️ COLLER EXACTEMENT ICI (ENTRE LE EXCEPT ET LE BANDEAU SUPÉRIEUR) ⬇️ ⬇️ ⬇️
-
 # --- MOTEUR DE CATÉGORISATION & EXPORT SEGMENTS FOOD ---
 @st.cache_data(show_spinner=False)
 def generate_food_segments_export(_df_orders, _df_rst):
-    # 1. Base restaurants depuis RST_list et Orders
     cols_id_name = ['Restaurant ID', 'Restaurant Name']
     l_rst = _df_rst[cols_id_name].dropna(subset=['Restaurant ID']) if (not _df_rst.empty and all(c in _df_rst.columns for c in cols_id_name)) else pd.DataFrame(columns=cols_id_name)
     l_ord = _df_orders[cols_id_name].dropna(subset=['Restaurant ID']) if (not _df_orders.empty and all(c in _df_orders.columns for c in cols_id_name)) else pd.DataFrame(columns=cols_id_name)
@@ -324,7 +310,6 @@ def generate_food_segments_export(_df_orders, _df_rst):
     df_base = pd.concat([l_rst, l_ord], ignore_index=True).drop_duplicates(subset=['Restaurant ID'], keep='first').copy()
     df_base['Restaurant ID'] = clean_id_series(df_base['Restaurant ID'])
     
-    # 2. Calcul du Best Seller All Time Category depuis les ventes réelles
     best_cat_df = pd.DataFrame(columns=['Restaurant ID', 'best seller all time category'])
     if not _df_orders.empty and 'Food Category' in _df_orders.columns:
         df_val = _df_orders.dropna(subset=['Restaurant ID', 'Food Category']).copy()
@@ -337,7 +322,6 @@ def generate_food_segments_export(_df_orders, _df_rst):
             best_cat_df = cat_counts.sort_values(['Restaurant ID', 'cnt'], ascending=[True, False]).drop_duplicates('Restaurant ID', keep='first')
             best_cat_df.rename(columns={'Food Category': 'best seller all time category'}, inplace=True)
             
-    # 3. Agrégation des textes de ventes par restaurant
     sales_agg = pd.DataFrame(columns=['Restaurant ID', 'sales_text'])
     if not _df_orders.empty:
         df_txt = _df_orders.dropna(subset=['Restaurant ID']).copy()
@@ -348,7 +332,6 @@ def generate_food_segments_export(_df_orders, _df_rst):
             lambda g: ' '.join(g['Food Item'].dropna().astype(str).tolist() + g['Food Category'].dropna().astype(str).tolist() + g['services'].dropna().astype(str).tolist())
         ).reset_index(name='sales_text')
 
-    # 4. Fusion Master
     res = pd.merge(df_base, best_cat_df[['Restaurant ID', 'best seller all time category']], on='Restaurant ID', how='left')
     res = pd.merge(res, sales_agg, on='Restaurant ID', how='left')
     
@@ -361,7 +344,6 @@ def generate_food_segments_export(_df_orders, _df_rst):
     res['Type cuisine'] = res['Cuisine Type'].fillna('Général').astype(str).str.strip()
     res['sales_text'] = res['sales_text'].fillna('')
 
-    # 5. Moteur d'affectation Segment Food (5 Catégories)
     def get_segment(row):
         txt = ' '.join([str(row['Type cuisine']), str(row['Services']), str(row['best seller all time category']), str(row['Restaurant Name']), str(row['sales_text'])]).lower()
         if any(k in txt for k in ['brunch', 'petit déj', 'petit dej', 'breakfast', 'coffee', 'café', 'cafe', 'douceur', 'sweet', 'dessert', 'glace', 'ice cream', 'gaufre', 'crêpe', 'crepe', 'pâtiss', 'patiss', 'boulang', 'bakery', 'jus', 'juice', 'smoothie', 'donut', 'churros']):
@@ -376,7 +358,6 @@ def generate_food_segments_export(_df_orders, _df_rst):
 
     res['Segment Food'] = res.apply(get_segment, axis=1)
 
-    # 6. Détection des 9 Tags / Indicateurs de spécialités
     tag_kw = {
         'Tacos🌮': ['taco'], 'Burger🍔': ['burger', 'whopper', 'big mac', 'mcdo'], 'Panini 🌭': ['panini'],
         'Sandwich 🌭': ['sandwich', 'sandw', 'club', 'bocadillo', 'subway', 'baguette'], 'Pizza🍕': ['pizza', 'calzone', 'domino', 'pizz'],
@@ -399,78 +380,6 @@ def generate_food_segments_export(_df_orders, _df_rst):
     return res[cols_order]
 
 df_export_master = generate_food_segments_export(df_merged_full, df_rst_master)
-
-# ⬆️ ⬆️ ⬆️ FIN DU BLOC À COLLER ⬆️ ⬆️ ⬆️
-
-# ==========================================
-# BANDEAU DE CONTRÔLE SUPÉRIEUR (TOP BAR)
-# ==========================================
-st.markdown("---")
-col_time_mode, col_time_sel, col_am_sel, col_stats = st.columns([1.5, 2, 1.5, 2])
-
-# ==========================================
-# BANDEAU DE CONTRÔLE SUPÉRIEUR (TOP BAR)
-# ==========================================
-st.markdown("---")
-col_time_mode, col_time_sel, col_am_sel, col_stats = st.columns([1.5, 2, 1.5, 2])
-
-with col_time_mode:
-    mode_temporel = st.radio("⏳ Vue Temporelle :", ["📊 Par Semaine", "🗓️ Par Mois"], horizontal=True, key="top_time_mode")
-
-with col_time_sel:
-    if mode_temporel == "📊 Par Semaine":
-        periodes_dispos = sorted([str(w) for w in df_merged_full['Week'].dropna().unique() if pd.notnull(w) and str(w).strip() not in ['nan', '', 'None', '<NA>']], reverse=True)
-        label_select = "📅 Semaine principale"
-        col_temps = 'Week'
-        label_evo_global = "WoW"
-    else:
-        periodes_dispos = sorted([str(m) for m in df_merged_full['Month'].dropna().unique() if pd.notnull(m) and str(m).strip() not in ['nan', '', 'None', '<NA>']], reverse=True)
-        label_select = "🗓️ Mois principal"
-        col_temps = 'Month'
-        label_evo_global = "MoM"
-        
-    periode_selectionnee = st.selectbox(label_select, periodes_dispos, key="top_time_select")
-    try: 
-        periode_precedente = periodes_dispos[periodes_dispos.index(periode_selectionnee) + 1]
-    except: 
-        periode_precedente = None
-        
-    semaine_selectionnee = periode_selectionnee
-    semaine_precedente = periode_precedente
-
-with col_am_sel:
-    am_choisi = st.selectbox("🎯 Pipeline / AM :", ["Global", "Houda", "Chaima", "Najwa", "Imane"], key="top_am_select")
-
-# Filtrage du périmètre AM après sélection du bandeau
-if am_choisi != "Global":
-    df_pipe_am = df_pipeline_master[df_pipeline_master['AM_Name'].astype(str).str.lower() == am_choisi.lower()]
-    am_ids = df_pipe_am['Restaurant ID'].unique()
-    liste_attendue = master_restos[master_restos['Restaurant ID'].isin(am_ids)].copy()
-    df_merged = df_merged_full[df_merged_full['Restaurant ID'].isin(am_ids)].copy()
-else:
-    liste_attendue = master_restos.copy()
-    df_merged = df_merged_full.copy()
-
-pattern_exclus = '|'.join(['test', 'restau fixe', 'restau avance'])
-df_merged = df_merged[~df_merged['Restaurant Name'].astype(str).str.contains(pattern_exclus, case=False, na=False)]
-liste_attendue = liste_attendue[~liste_attendue['Restaurant Name'].astype(str).str.contains(pattern_exclus, case=False, na=False)]
-
-try: 
-    df_caisse = pd.read_csv("CaisseMA.csv", sep=None, engine='python')
-    if 'Restaurant ID' in df_caisse.columns: df_caisse['Restaurant ID'] = clean_id_series(df_caisse['Restaurant ID'])
-except: df_caisse = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name'])
-    
-try: 
-    df_new = pd.read_csv("NewRestaurants.csv", sep=None, engine='python')
-    if 'Restaurant ID' in df_new.columns: df_new['Restaurant ID'] = clean_id_series(df_new['Restaurant ID'])
-except: df_new = pd.DataFrame(columns=['Restaurant ID', 'Restaurant Name'])
-
-with col_stats:
-    msg_mode = f"⚡ Master Drive ({len(fichiers_disponibles)} fichiers)" if 'master_file_info' in globals() and master_file_info else "🔄 Consolidation active"
-    st.info(f"**Périmètre :** {am_choisi} | **Total Cmds :** {len(df_merged):,}\n{msg_mode}")
-
-st.markdown("---")
-
 # ==========================================
 # 4. MOTEUR DE CALCULS & PROTECTION ZERO (CORRIGÉ & ROBUSTE)
 # ==========================================
